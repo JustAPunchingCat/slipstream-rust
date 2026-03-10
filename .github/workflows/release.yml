@@ -436,70 +436,6 @@ jobs:
             export OPENSSL_INCLUDE_DIR=/usr/local/opt/openssl@3/include
             export CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-L/usr/local/opt/openssl@3/lib -C link-arg=-arch -C link-arg=x86_64"
           fi
-         
-          # Android explicit options
-          if [[ "${{ matrix.target }}" == "aarch64-linux-android" ]]; then
-            export ANDROID_ABI=arm64-v8a
-            export ANDROID_PLATFORM=24
-            
-            export OPENSSL_INCLUDE_DIR="${ANDROID_NDK_HOME}/sysroot/usr/include"
-            export OPENSSL_CRYPTO_LIBRARY="${ANDROID_NDK_HOME}/sysroot/usr/lib/aarch64-linux-android/libcrypto.so"
-            export OPENSSL_SSL_LIBRARY="${ANDROID_NDK_HOME}/sysroot/usr/lib/aarch64-linux-android/libssl.so"
-            
-            # Fix file access
-            export CFLAGS="-fPIC"
-            export CXXFLAGS="-fPIC"
-
-            
-            
-            #export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=" -L ${OPENSSL_LIB_DIR} -I ${OPENSSL_INCLUDE_DIR}"
-            #export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN}/aarch64-linux-android24-clang"
-          fi
-
-        
-         # Android
-        #
-        # echo  "${CC}"
-        #     echo "${AR}"
-            
-        #       echo "${OPENSSL_INCLUDE_DIR}"
-        #     echo "${OPENSSL_CRYPTO_LIBRARY}"
-        #        echo "${OPENSSL_SSL_LIBRARY}"
-
-          #  echo "${NDK_TOOLCHAIN}"
-         #  echo "API LEVEL"
-         # echo  "${ANDROID_PLATFORM}"
-         #    echo "${ANDROID_NDK_HOME}"
-         #      echo "ABI"
-          #    echo "${ANDROID_ABI}"
-         #    echo "${TARGET}"
-         #    echo "PATH"
-         #    echo "${PATH}"
-
-
-
-
-          #set -x
-          #export CFLAGS="-fPIC"
-          #export CXXFLAGS="-fPIC"
-
-
-        #  /usr/local/lib/android/sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-         #  export OPENSSL_DIR=/usr/local/opt/openssl@3
-         # export OPENSSL_ROOT_DIR=/usr/local/opt/openssl@3
-         # export OPENSSL_LIB_DIR=/opt/homebrew/opt/openssl@3/lib
-          #export OPENSSL_CRYPTO_LIBRARY="$OPENSSL_DIR/lib/libcrypto.dylib"
-          #export OPENSSL_SSL_LIBRARY="$OPENSSL_DIR/lib/libssl.dylib"
-          #export CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-L/opt/homebrew/opt/openssl@3/lib"
-
-
-
-
-
-
-
-
-
 
           # Use vendored OpenSSL for Windows; Linux alternate arches use Docker
           if [[ "${{ runner.os }}" == "Windows" ]]; then
@@ -517,8 +453,11 @@ jobs:
           export CC="${NDK_TOOLCHAIN}/aarch64-linux-android24-clang"
           export CXX="${NDK_TOOLCHAIN}/aarch64-linux-android24-clang++"
           export AR="${NDK_TOOLCHAIN}/llvm-ar"
+          export RANLIB="${NDK_TOOLCHAIN}/llvm-ranlib"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${CC}"
-          cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server
+          
+          # Use openssl-vendored to build OpenSSL from source for Android
+          cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server --features openssl-vendored
 
       - name: Prepare binaries
         shell: bash
