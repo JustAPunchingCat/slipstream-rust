@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = env::var("TARGET").unwrap_or_default();
     let cc_tool = cc_utils::resolve_cc(&target);
     let auto_build = env_flag("PICOQUIC_AUTO_BUILD", true);
+
     let explicit_picoquic_include = env::var_os("PICOQUIC_INCLUDE_DIR").is_some();
     let explicit_picoquic_lib = env::var_os("PICOQUIC_LIB_DIR").is_some();
     let explicit_picoquic_include_lib = explicit_picoquic_include || explicit_picoquic_lib;
@@ -166,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-link-lib=static=slipstream_ffi_c_objs");
 
     let picoquic_libs = resolve_picoquic_libs(&picoquic_lib_dir).ok_or(
-        "Missing picoquic build artifacts; run ./scripts/build_picoquic.sh or set PICOQUIC_BUILD_DIR/PICOQUIC_LIB_DIR.",
+       "Missing picoquic build artifacts; run ./scripts/build_picoquic.sh or set PICOQUIC_BUILD_DIR/PICOQUIC_LIB_DIR.",
     )?;
     for dir in picoquic_libs.search_dirs {
         println!("cargo:rustc-link-search=native={}", dir.display());

@@ -4,16 +4,19 @@ use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
 fn build_dns_query(name: &str) -> Vec<u8> {
-    encode_query(&QueryParams {
-        id: 1,
-        qname: name,
-        qtype: RR_A,
-        qclass: CLASS_IN,
-        rd: true,
-        cd: false,
-        qdcount: 1,
-        is_query: true,
-    }, None)
+    encode_query(
+        &QueryParams {
+            id: 1,
+            qname: name,
+            qtype: RR_A,
+            qclass: CLASS_IN,
+            rd: true,
+            cd: false,
+            qdcount: 1,
+            is_query: true,
+        },
+        None,
+    )
     .expect("dns query")
 }
 
