@@ -28,6 +28,9 @@ pub(crate) fn build_picoquic(
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join(".picoquic-build"));
 
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let build_type = if profile == "release" { "Release" } else { "Debug" };
+
     let mut command = if cfg!(windows) {
         let mut cmd = Command::new("sh");
         cmd.arg(script);
@@ -39,7 +42,8 @@ pub(crate) fn build_picoquic(
         .env("PICOQUIC_DIR", picoquic_dir)
         .env("PICOQUIC_BUILD_DIR", build_dir)
         .env("PICOQUIC_TARGET", target)
-        .env("CARGO_FEATURE_PICOQUIC_MINIMAL_BUILD", "1");
+        .env("CARGO_FEATURE_PICOQUIC_MINIMAL_BUILD", "1")
+        .env("BUILD_TYPE", build_type);
     if target.contains("android") {
         if let Ok(value) = env::var("ANDROID_NDK_HOME") {
             command.env("ANDROID_NDK_HOME", value);

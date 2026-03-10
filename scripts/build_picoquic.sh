@@ -83,7 +83,7 @@ fi
 
 cmake -S "${PICOQUIC_DIR}" -B "${BUILD_DIR}" "${CMAKE_ARGS[@]}"
 if [[ ${#BUILD_TARGET[@]} -gt 0 ]]; then
-  cmake --build "${BUILD_DIR}" "${BUILD_TARGET[@]}"
+  cmake --build "${BUILD_DIR}" --config "${BUILD_TYPE}" "${BUILD_TARGET[@]}"
 else
-  cmake --build "${BUILD_DIR}"
+  cmake --build "${BUILD_DIR}" --config "${BUILD_TYPE}"
 fi
