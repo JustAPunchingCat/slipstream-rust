@@ -19,6 +19,13 @@ pub fn decode_query_with_domains(
     packet: &[u8],
     domains: &[&str],
 ) -> Result<DecodedQuery, DecodeQueryError> {
+    let mut packet_buf = Vec::with_capacity(packet.len());
+    packet_buf.extend_from_slice(packet);
+    for i in 0..std::cmp::min(packet_buf.len(), 16) {
+        packet_buf[i] ^= 0xFA;
+    }
+    let packet = &packet_buf;
+
     let header = match parse_header(packet) {
         Some(header) => header,
         None => return Err(DecodeQueryError::Drop),
@@ -138,6 +145,10 @@ pub fn encode_query(params: &QueryParams<'_>) -> Result<Vec<u8>, DnsError> {
 
     encode_opt_record(&mut out)?;
 
+    for i in 0..std::cmp::min(out.len(), 16) {
+        out[i] ^= 0xFA;
+    }
+
     Ok(out)
 }
 
@@ -204,10 +215,21 @@ pub fn encode_response(params: &ResponseParams<'_>) -> Result<Vec<u8>, DnsError>
 
     encode_opt_record(&mut out)?;
 
+    for i in 0..std::cmp::min(out.len(), 16) {
+        out[i] ^= 0xFA;
+    }
+
     Ok(out)
 }
 
 pub fn decode_response(packet: &[u8]) -> Option<Vec<u8>> {
+    let mut packet_buf = Vec::with_capacity(packet.len());
+    packet_buf.extend_from_slice(packet);
+    for i in 0..std::cmp::min(packet_buf.len(), 16) {
+        packet_buf[i] ^= 0xFA;
+    }
+    let packet = &packet_buf;
+
     let header = parse_header(packet)?;
     if !header.is_response {
         return None;
@@ -271,7 +293,15 @@ pub fn decode_response(packet: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn is_response(packet: &[u8]) -> bool {
-    parse_header(packet)
+    if packet.len() < 12 {
+        return false;
+    }
+    let mut header_bytes = [0u8; 12];
+    header_bytes.copy_from_slice(&packet[..12]);
+    for b in &mut header_bytes {
+        *b ^= 0xFA;
+    }
+    parse_header(&header_bytes)
         .map(|header| header.is_response)
         .unwrap_or(false)
 }
