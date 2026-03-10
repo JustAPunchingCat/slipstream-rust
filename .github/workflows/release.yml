@@ -20,26 +20,8 @@ jobs:
             target: x86_64-unknown-linux-gnu
             asset_name: linux-amd64
           - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            asset_name: linux-arm64
-          - os: ubuntu-latest
-            target: armv7-unknown-linux-gnueabihf
-            asset_name: linux-armv7
-          - os: ubuntu-latest
-            target: riscv64gc-unknown-linux-gnu
-            asset_name: linux-riscv64
-          - os: ubuntu-latest
-            target: mips64-unknown-linux-gnuabi64
-            asset_name: linux-mips64
-          - os: ubuntu-latest
-            target: mips64el-unknown-linux-gnuabi64
-            asset_name: linux-mips64le
-          - os: ubuntu-latest
-            target: mips-unknown-linux-gnu
-            asset_name: linux-mips
-          - os: ubuntu-latest
-            target: mipsel-unknown-linux-gnu
-            asset_name: linux-mipsle
+            target: aarch64-linux-android
+            asset_name: android-arm64
           - os: macos-latest
             target: aarch64-apple-darwin
             asset_name: darwin-arm64
@@ -61,24 +43,14 @@ jobs:
           path: slipstream-rust
           submodules: recursive
 
-      - name: Set up QEMU
-        if: runner.os == 'Linux' && contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        if: runner.os == 'Linux' && contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
-        uses: docker/setup-buildx-action@v3
-        with:
-          platforms: linux/arm64,linux/arm/v7,linux/riscv64,linux/mips64,linux/mips64le,linux/mips,linux/mipsle
-
       - name: Install Rust
-        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target) || contains(matrix.target, 'android')
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Install cross toolchain
-        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        if: (runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)) && !contains(matrix.target, 'android')
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ env.TARGET }}
@@ -92,7 +64,7 @@ jobs:
           echo "short_commit=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
 
       - name: Cache Rust dependencies
-        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target) || contains(matrix.target, 'android')
         uses: actions/cache@v4
         with:
           path: |
@@ -107,7 +79,7 @@ jobs:
             ${{ runner.os }}-rust-
 
       - name: Install build dependencies (Linux)
-        if: runner.os == 'Linux' && !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        if: runner.os == 'Linux' && !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target)
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake pkg-config gcc g++ perl
@@ -126,6 +98,10 @@ jobs:
           else
             brew install openssl@3
           fi
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install build dependencies (Windows)
         if: runner.os == 'Windows'
@@ -191,51 +167,28 @@ jobs:
             echo "OPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3" >> $GITHUB_ENV
           fi
 
-      - name: Build with Docker buildx (Linux alternate architectures)
-        if: runner.os == 'Linux' && contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
-        run: |
-          set -e
-          TARGET="${{ matrix.target }}"
-          # Map Rust target to Docker platform and Dockerfile
-          case "$TARGET" in
-            aarch64-unknown-linux-gnu)       DOCKER_PLATFORM=linux/arm64    DOCKERFILE=Dockerfile.arm64    ;;
-            armv7-unknown-linux-gnueabihf)   DOCKER_PLATFORM=linux/arm/v7   DOCKERFILE=Dockerfile.armv7    ;;
-            riscv64gc-unknown-linux-gnu)     DOCKER_PLATFORM=linux/riscv64  DOCKERFILE=Dockerfile.riscv64  ;;
-            mips64-unknown-linux-gnuabi64)   DOCKER_PLATFORM=linux/amd64    DOCKERFILE=Dockerfile.mips64   ;;
-            mips64el-unknown-linux-gnuabi64) DOCKER_PLATFORM=linux/amd64    DOCKERFILE=Dockerfile.mips64le ;;
-            mips-unknown-linux-gnu)          DOCKER_PLATFORM=linux/amd64    DOCKERFILE=Dockerfile.mips     ;;
-            mipsel-unknown-linux-gnu)        DOCKER_PLATFORM=linux/amd64    DOCKERFILE=Dockerfile.mipsle   ;;
-            *) echo "Unsupported Docker target: $TARGET"; exit 1 ;;
-          esac
-          TAG="slipstream-build:${TARGET%%-*}"
-          mkdir -p docker-build-output
-          mkdir -p "slipstream-rust/target/$TARGET/release"
-          
-          # Note: This assumes Dockerfiles are present in the repo root.
-          # If they are missing, this step will fail.
-          docker buildx build \
-            --platform "$DOCKER_PLATFORM" \
-            --file "slipstream-rust/$DOCKERFILE" \
-            --tag "$TAG" \
-            --output type=docker,dest=- \
-            slipstream-rust | docker load
-            
-          docker run --rm \
-            --platform "$DOCKER_PLATFORM" \
-            -v "${{ github.workspace }}/slipstream-rust:/workspace/slipstream-rust" \
-            -v "${{ github.workspace }}/docker-build-output:/workspace/output" \
-            "$TAG"
-            
-          sudo chown -R $(id -u):$(id -g) slipstream-rust/target/ 2>/dev/null || true
-          cp docker-build-output/slipstream-client "slipstream-rust/target/$TARGET/release/"
-          cp docker-build-output/slipstream-server "slipstream-rust/target/$TARGET/release/"
-          ls -lh "slipstream-rust/target/$TARGET/release/"
+      - name: Setup NDK (Android)
+        if: contains(matrix.target, 'android')
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+          target-architecture: aarch64
 
       - name: Build picoquic (Linux)
-        if: runner.os == 'Linux' && !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        if: runner.os == 'Linux' && !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target)
         working-directory: slipstream-rust
         run: |
           # Assumes scripts/build_picoquic.sh exists in your repo
+          bash scripts/build_picoquic.sh
+          echo "PICOQUIC_DIR=${GITHUB_WORKSPACE}/slipstream-rust/vendor/picoquic" >> $GITHUB_ENV
+          echo "PICOQUIC_BUILD_DIR=${GITHUB_WORKSPACE}/slipstream-rust/.picoquic-build" >> $GITHUB_ENV
+
+      - name: Build picoquic (Android)
+        if: contains(matrix.target, 'android')
+        working-directory: slipstream-rust
+        run: |
+          export ANDROID_ABI=arm64-v8a
+          export ANDROID_PLATFORM=24
           bash scripts/build_picoquic.sh
           echo "PICOQUIC_DIR=${GITHUB_WORKSPACE}/slipstream-rust/vendor/picoquic" >> $GITHUB_ENV
           echo "PICOQUIC_BUILD_DIR=${GITHUB_WORKSPACE}/slipstream-rust/.picoquic-build" >> $GITHUB_ENV
@@ -453,7 +406,7 @@ jobs:
           fi
 
       - name: Build slipstream binaries
-        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        if: (runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target)) && !contains(matrix.target, 'android')
         working-directory: slipstream-rust
         shell: bash
         env:
@@ -490,6 +443,18 @@ jobs:
           else
             cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server
           fi
+
+      - name: Build slipstream binaries (Android)
+        if: contains(matrix.target, 'android')
+        working-directory: slipstream-rust
+        run: |
+          NDK_TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # API 24 is Android 7.0
+          export CC="${NDK_TOOLCHAIN}/aarch64-linux-android24-clang"
+          export CXX="${NDK_TOOLCHAIN}/aarch64-linux-android24-clang++"
+          export AR="${NDK_TOOLCHAIN}/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${CC}"
+          cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server
 
       - name: Prepare binaries
         shell: bash
@@ -538,6 +503,7 @@ jobs:
 
       - name: Create release if needed
         shell: bash
+        working-directory: slipstream-rust
         env:
          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -552,7 +518,7 @@ jobs:
              --notes "Release for slipstream-rust commit $TAG
         
          This release contains prebuilt binaries for:
-         - **Linux**: x86_64 (amd64), ARM64 (aarch64), ARMv7, RISC-V 64, MIPS64, MIPS64LE, MIPS, MIPSLE
+         - **Linux**: x86_64 (amd64)
          - **Windows**: x86_64 (amd64)
          - **macOS**: ARM64 (Apple Silicon), Intel x86_64"
          fi

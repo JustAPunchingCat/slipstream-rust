@@ -47,7 +47,10 @@ pub fn get_mtu() -> u32 {
 }
 
 pub fn get_obfuscation_key() -> u8 {
-    CONFIG.get().map(|c| c.key).unwrap_or(DEFAULT_OBFUSCATION_KEY)
+    CONFIG
+        .get()
+        .map(|c| c.key)
+        .unwrap_or(DEFAULT_OBFUSCATION_KEY)
 }
 
 pub fn parse_hex_u8(input: &str) -> Result<u8, String> {

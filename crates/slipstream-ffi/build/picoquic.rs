@@ -29,7 +29,11 @@ pub(crate) fn build_picoquic(
         .unwrap_or_else(|| root.join(".picoquic-build"));
 
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let build_type = if profile == "release" { "Release" } else { "Debug" };
+    let build_type = if profile == "release" {
+        "Release"
+    } else {
+        "Debug"
+    };
 
     let mut command = if cfg!(windows) {
         let mut cmd = Command::new("sh");
@@ -203,7 +207,9 @@ pub(crate) fn resolve_picoquic_libs(dir: &Path) -> Option<PicoquicLibs> {
     } else {
         None
     };
-    let picoquic_search_dir = config_subdir.map(|s| dir.join(s)).unwrap_or_else(|| dir.to_path_buf());
+    let picoquic_search_dir = config_subdir
+        .map(|s| dir.join(s))
+        .unwrap_or_else(|| dir.to_path_buf());
 
     if let Some(libs) = resolve_picoquic_libs_single_dir(&picoquic_search_dir) {
         return Some(PicoquicLibs {
@@ -217,10 +223,14 @@ pub(crate) fn resolve_picoquic_libs(dir: &Path) -> Option<PicoquicLibs> {
         picotls_base_dirs.push(parent.join("_deps").join("picotls-build"));
     }
     for picotls_base_dir in picotls_base_dirs {
-        let picotls_search_dir = config_subdir.map(|s| picotls_base_dir.join(s)).unwrap_or_else(|| picotls_base_dir.to_path_buf());
+        let picotls_search_dir = config_subdir
+            .map(|s| picotls_base_dir.join(s))
+            .unwrap_or_else(|| picotls_base_dir.to_path_buf());
         if let Some(libs) = resolve_picoquic_libs_split(&picoquic_search_dir, &picotls_search_dir) {
             let mut search_dirs = vec![picoquic_search_dir.clone()];
-            if picotls_search_dir != picoquic_search_dir && !search_dirs.contains(&picotls_search_dir) {
+            if picotls_search_dir != picoquic_search_dir
+                && !search_dirs.contains(&picotls_search_dir)
+            {
                 search_dirs.push(picotls_search_dir);
             }
             return Some(PicoquicLibs { search_dirs, libs });
@@ -228,7 +238,9 @@ pub(crate) fn resolve_picoquic_libs(dir: &Path) -> Option<PicoquicLibs> {
     }
 
     if let Some(parent) = dir.parent() {
-        let parent_search_dir = config_subdir.map(|s| parent.join(s)).unwrap_or_else(|| parent.to_path_buf());
+        let parent_search_dir = config_subdir
+            .map(|s| parent.join(s))
+            .unwrap_or_else(|| parent.to_path_buf());
         if let Some(libs) = resolve_picoquic_libs_split(&parent_search_dir, &picoquic_search_dir) {
             return Some(PicoquicLibs {
                 search_dirs: vec![parent_search_dir, picoquic_search_dir],
@@ -236,8 +248,12 @@ pub(crate) fn resolve_picoquic_libs(dir: &Path) -> Option<PicoquicLibs> {
             });
         }
         if let Some(grandparent) = parent.parent() {
-            let grandparent_search_dir = config_subdir.map(|s| grandparent.join(s)).unwrap_or_else(|| grandparent.to_path_buf());
-            if let Some(libs) = resolve_picoquic_libs_split(&grandparent_search_dir, &picoquic_search_dir) {
+            let grandparent_search_dir = config_subdir
+                .map(|s| grandparent.join(s))
+                .unwrap_or_else(|| grandparent.to_path_buf());
+            if let Some(libs) =
+                resolve_picoquic_libs_split(&grandparent_search_dir, &picoquic_search_dir)
+            {
                 return Some(PicoquicLibs {
                     search_dirs: vec![grandparent_search_dir, picoquic_search_dir],
                     libs,

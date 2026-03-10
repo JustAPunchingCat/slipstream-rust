@@ -8,18 +8,20 @@ use crate::picoquic::{
     picoquic_set_preemptive_repeat_policy, picoquic_set_stream_data_consumption_mode,
     picoquic_stop_sending, slipstream_take_stateless_packet_for_cid, PICOQUIC_MAX_PACKET_SIZE,
 };
-#[cfg(not(windows))]
-use libc::{c_char, c_int, c_ulong, size_t, sockaddr_storage};
-#[cfg(windows)]
-use winapi::shared::ws2def::{SOCKADDR_STORAGE as sockaddr_storage, SOCKADDR_IN, AF_INET, AF_INET6};
-#[cfg(windows)]
-use winapi::shared::ws2ipdef::SOCKADDR_IN6_LH;
 #[cfg(windows)]
 use libc::{c_char, c_int, c_ulong, size_t};
+#[cfg(not(windows))]
+use libc::{c_char, c_int, c_ulong, size_t, sockaddr_storage};
 use slipstream_core::tcp::stream_write_buffer_bytes;
 use std::ffi::CStr;
 use std::io::Write;
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream};
+#[cfg(windows)]
+use winapi::shared::ws2def::{
+    AF_INET, AF_INET6, SOCKADDR_IN, SOCKADDR_STORAGE as sockaddr_storage,
+};
+#[cfg(windows)]
+use winapi::shared::ws2ipdef::SOCKADDR_IN6_LH;
 
 pub const SLIPSTREAM_INTERNAL_ERROR: u64 = 0x101;
 pub const SLIPSTREAM_FILE_CANCEL_ERROR: u64 = 0x105;
@@ -287,7 +289,8 @@ pub fn socket_addr_to_storage(addr: SocketAddr) -> sockaddr_storage {
                 let sockaddr_ptr = &mut storage as *mut _ as *mut SOCKADDR_IN;
                 (*sockaddr_ptr).sin_family = AF_INET as u16;
                 (*sockaddr_ptr).sin_port = addr.port().to_be();
-                *(*sockaddr_ptr).sin_addr.S_un.S_addr_mut() = u32::from_ne_bytes(addr.ip().octets());
+                *(*sockaddr_ptr).sin_addr.S_un.S_addr_mut() =
+                    u32::from_ne_bytes(addr.ip().octets());
             }
             storage
         }
@@ -316,8 +319,7 @@ pub fn sockaddr_storage_to_socket_addr(storage: &sockaddr_storage) -> Result<Soc
     let family = storage.ss_family as i32;
     match family {
         AF_INET => {
-            let addr_in: &SOCKADDR_IN =
-                unsafe { &*(storage as *const _ as *const SOCKADDR_IN) };
+            let addr_in: &SOCKADDR_IN = unsafe { &*(storage as *const _ as *const SOCKADDR_IN) };
             let ip = Ipv4Addr::from(unsafe { addr_in.sin_addr.S_un.S_addr().to_ne_bytes() });
             let port = u16::from_be(addr_in.sin_port);
             Ok(SocketAddr::V4(SocketAddrV4::new(ip, port)))

@@ -96,12 +96,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut object_paths = Vec::new();
     let mut c_sources = vec![
-        ("slipstream_server_cc.c", vec![&picoquic_include_dir as &Path]),
-        ("slipstream_mixed_cc.c", vec![&picoquic_include_dir as &Path]),
+        (
+            "slipstream_server_cc.c",
+            vec![&picoquic_include_dir as &Path],
+        ),
+        (
+            "slipstream_mixed_cc.c",
+            vec![&picoquic_include_dir as &Path],
+        ),
         ("slipstream_poll.c", vec![&picoquic_include_dir as &Path]),
-        ("slipstream_stateless_packet.c", vec![&picoquic_include_dir as &Path]),
-        ("slipstream_test_helpers.c", vec![&picoquic_include_dir as &Path]),
-        ("picotls_layout.c", vec![&picoquic_include_dir as &Path, &picotls_include_dir as &Path]),
+        (
+            "slipstream_stateless_packet.c",
+            vec![&picoquic_include_dir as &Path],
+        ),
+        (
+            "slipstream_test_helpers.c",
+            vec![&picoquic_include_dir as &Path],
+        ),
+        (
+            "picotls_layout.c",
+            vec![
+                &picoquic_include_dir as &Path,
+                &picotls_include_dir as &Path,
+            ],
+        ),
     ];
 
     let wincompat_src = manifest_dir.join("src").join("wincompat.c");
@@ -124,7 +142,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut flags = Vec::new();
         if target.contains("msvc") {
             flags.push("/D_WINDOWS".to_string());
-            flags.push(format!("/FI{}", picoquic_include_dir.join("wincompat.h").display()));
+            flags.push(format!(
+                "/FI{}",
+                picoquic_include_dir.join("wincompat.h").display()
+            ));
             flags.push("/FIws2tcpip.h".to_string());
             flags.push("/D__attribute__(x)=".to_string());
             flags.push("/std:c11".to_string());
@@ -158,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("cargo:rustc-link-lib=dylib=pthread");
     } else {
         maybe_link_android_builtins(&target, &cc_tool);
-    }   
+    }
 
     if target.contains("msvc") {
         println!("cargo:rustc-link-lib=dylib=ws2_32");

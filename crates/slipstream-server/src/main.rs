@@ -7,7 +7,9 @@ mod udp_fallback;
 use clap::{parser::ValueSource, CommandFactory, FromArgMatches, Parser};
 use server::{run_server, ServerConfig};
 use slipstream_core::{
-    cli::{exit_with_error, exit_with_message, init_logging, parse_hex_u8, set_config, unwrap_or_exit},
+    cli::{
+        exit_with_error, exit_with_message, init_logging, parse_hex_u8, set_config, unwrap_or_exit,
+    },
     normalize_domain, parse_host_port, parse_host_port_parts, sip003, AddressKind, HostPort,
 };
 use tokio::runtime::Builder;

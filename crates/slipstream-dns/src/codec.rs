@@ -11,7 +11,11 @@ use crate::wire::{
     write_u32,
 };
 
-pub fn decode_query(packet: &[u8], domain: &str, xor_key: u8) -> Result<DecodedQuery, DecodeQueryError> {
+pub fn decode_query(
+    packet: &[u8],
+    domain: &str,
+    xor_key: u8,
+) -> Result<DecodedQuery, DecodeQueryError> {
     decode_query_with_domains(packet, &[domain], xor_key)
 }
 
