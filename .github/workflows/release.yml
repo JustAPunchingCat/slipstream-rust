@@ -1,0 +1,574 @@
+name: Build and Release
+
+on:
+  workflow_dispatch: # Manual trigger
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: windows-amd64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_name: linux-amd64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset_name: linux-arm64
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            asset_name: linux-armv7
+          - os: ubuntu-latest
+            target: riscv64gc-unknown-linux-gnu
+            asset_name: linux-riscv64
+          - os: ubuntu-latest
+            target: mips64-unknown-linux-gnuabi64
+            asset_name: linux-mips64
+          - os: ubuntu-latest
+            target: mips64el-unknown-linux-gnuabi64
+            asset_name: linux-mips64le
+          - os: ubuntu-latest
+            target: mips-unknown-linux-gnu
+            asset_name: linux-mips
+          - os: ubuntu-latest
+            target: mipsel-unknown-linux-gnu
+            asset_name: linux-mipsle
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset_name: darwin-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset_name: darwin-amd64
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      ASSET_NAME: ${{ matrix.asset_name }}
+      EXE_EXT: ${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: slipstream-rust
+          submodules: recursive
+
+      - name: Set up QEMU
+        if: runner.os == 'Linux' && contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: runner.os == 'Linux' && contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/arm64,linux/arm/v7,linux/riscv64,linux/mips64,linux/mips64le,linux/mips,linux/mipsle
+
+      - name: Install Rust
+        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross toolchain
+        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ env.TARGET }}
+
+      - name: Get commit hash
+        id: get_commit
+        working-directory: slipstream-rust
+        shell: bash
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "short_commit=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Cache Rust dependencies
+        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            slipstream-rust/target/
+          key: ${{ runner.os }}-rust-${{ matrix.target }}-${{ steps.get_commit.outputs.commit }}
+          restore-keys: |
+            ${{ runner.os }}-rust-${{ matrix.target }}-
+            ${{ runner.os }}-rust-
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux' && !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config gcc g++ perl
+          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" ]]; then
+            sudo apt-get install -y libssl-dev
+          fi
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake pkg-config
+          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+            # Install x86_64 Homebrew and OpenSSL for cross-compilation
+            arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+            arch -x86_64 /usr/local/bin/brew install openssl@3
+          else
+            brew install openssl@3
+          fi
+
+      - name: Install build dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install cmake pkgconfiglite strawberryperl -y
+
+          # Find and configure OpenSSL
+          $opensslPaths = @(
+            "C:\Program Files\OpenSSL",
+            "C:\Program Files\OpenSSL-Win64",
+            "C:\OpenSSL-Win64",
+            "C:\OpenSSL"
+          )
+
+          foreach ($path in $opensslPaths) {
+            if (Test-Path $path) {
+              $libDir = Get-ChildItem -Path "$path\lib" -Filter "libcrypto*.lib" -Recurse -ErrorAction SilentlyContinue |
+                        Select-Object -First 1 | ForEach-Object { $_.DirectoryName }
+
+              if ($libDir) {
+                echo "OPENSSL_DIR=$path" >> $env:GITHUB_ENV
+                echo "OPENSSL_ROOT_DIR=$path" >> $env:GITHUB_ENV
+                echo "OPENSSL_LIB_DIR=$libDir" >> $env:GITHUB_ENV
+                echo "OPENSSL_INCLUDE_DIR=$path\include" >> $env:GITHUB_ENV
+                Write-Host "OpenSSL configured at $path (libs in $libDir)"
+                break
+              }
+            }
+          }
+
+      - name: Setup Perl for OpenSSL vendored build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perlPaths = @(
+            "C:\Strawberry\perl\bin",
+            "C:\Program Files\Strawberry\perl\bin",
+            "${env:ProgramFiles}\Strawberry\perl\bin"
+          )
+
+          foreach ($path in $perlPaths) {
+            $exe = Join-Path $path "perl.exe"
+            if (Test-Path $exe) {
+              $env:Path = "$path;$env:Path"
+              echo "PATH=$path`;$env:Path" >> $env:GITHUB_ENV
+              echo "PERL=$exe" >> $env:GITHUB_ENV
+              Write-Host "Found Strawberry Perl at $path"
+              break
+            }
+          }
+
+      - name: Setup OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+            echo "PKG_CONFIG_PATH=/usr/local/opt/openssl@3/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+            echo "OPENSSL_DIR=/usr/local/opt/openssl@3" >> $GITHUB_ENV
+            echo "OPENSSL_ROOT_DIR=/usr/local/opt/openssl@3" >> $GITHUB_ENV
+          else
+            echo "PKG_CONFIG_PATH=/opt/homebrew/opt/openssl@3/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+            echo "OPENSSL_DIR=/opt/homebrew/opt/openssl@3" >> $GITHUB_ENV
+            echo "OPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3" >> $GITHUB_ENV
+          fi
+
+      - name: Build with Docker buildx (Linux alternate architectures)
+        if: runner.os == 'Linux' && contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        run: |
+          set -e
+          TARGET="${{ matrix.target }}"
+          # Map Rust target to Docker platform and Dockerfile
+          case "$TARGET" in
+            aarch64-unknown-linux-gnu)       DOCKER_PLATFORM=linux/arm64    DOCKERFILE=Dockerfile.arm64    ;;
+            armv7-unknown-linux-gnueabihf)   DOCKER_PLATFORM=linux/arm/v7   DOCKERFILE=Dockerfile.armv7    ;;
+            riscv64gc-unknown-linux-gnu)     DOCKER_PLATFORM=linux/riscv64  DOCKERFILE=Dockerfile.riscv64  ;;
+            mips64-unknown-linux-gnuabi64)   DOCKER_PLATFORM=linux/amd64    DOCKERFILE=Dockerfile.mips64   ;;
+            mips64el-unknown-linux-gnuabi64) DOCKER_PLATFORM=linux/amd64    DOCKERFILE=Dockerfile.mips64le ;;
+            mips-unknown-linux-gnu)          DOCKER_PLATFORM=linux/amd64    DOCKERFILE=Dockerfile.mips     ;;
+            mipsel-unknown-linux-gnu)        DOCKER_PLATFORM=linux/amd64    DOCKERFILE=Dockerfile.mipsle   ;;
+            *) echo "Unsupported Docker target: $TARGET"; exit 1 ;;
+          esac
+          TAG="slipstream-build:${TARGET%%-*}"
+          mkdir -p docker-build-output
+          mkdir -p "slipstream-rust/target/$TARGET/release"
+          
+          # Note: This assumes Dockerfiles are present in the repo root.
+          # If they are missing, this step will fail.
+          docker buildx build \
+            --platform "$DOCKER_PLATFORM" \
+            --file "slipstream-rust/$DOCKERFILE" \
+            --tag "$TAG" \
+            --output type=docker,dest=- \
+            slipstream-rust | docker load
+            
+          docker run --rm \
+            --platform "$DOCKER_PLATFORM" \
+            -v "${{ github.workspace }}/slipstream-rust:/workspace/slipstream-rust" \
+            -v "${{ github.workspace }}/docker-build-output:/workspace/output" \
+            "$TAG"
+            
+          sudo chown -R $(id -u):$(id -g) slipstream-rust/target/ 2>/dev/null || true
+          cp docker-build-output/slipstream-client "slipstream-rust/target/$TARGET/release/"
+          cp docker-build-output/slipstream-server "slipstream-rust/target/$TARGET/release/"
+          ls -lh "slipstream-rust/target/$TARGET/release/"
+
+      - name: Build picoquic (Linux)
+        if: runner.os == 'Linux' && !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        working-directory: slipstream-rust
+        run: |
+          # Assumes scripts/build_picoquic.sh exists in your repo
+          bash scripts/build_picoquic.sh
+          echo "PICOQUIC_DIR=${GITHUB_WORKSPACE}/slipstream-rust/vendor/picoquic" >> $GITHUB_ENV
+          echo "PICOQUIC_BUILD_DIR=${GITHUB_WORKSPACE}/slipstream-rust/.picoquic-build" >> $GITHUB_ENV
+
+      - name: Build picoquic (macOS)
+        if: runner.os == 'macOS'
+        working-directory: slipstream-rust
+        shell: bash
+        run: |
+          PICOQUIC_DIR="${GITHUB_WORKSPACE}/slipstream-rust/vendor/picoquic"
+          PICOQUIC_BUILD_DIR="${GITHUB_WORKSPACE}/slipstream-rust/.picoquic-build"
+
+          CMAKE_ARGS=(-S "$PICOQUIC_DIR" -B "$PICOQUIC_BUILD_DIR"
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            -DPICOQUIC_FETCH_PTLS=ON
+            -DBUILD_TESTING=OFF
+            -Dpicoquic_BUILD_TESTS=OFF
+            -Wno-dev)
+
+          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+            CMAKE_ARGS+=(
+              -DCMAKE_OSX_ARCHITECTURES=x86_64
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=10.12
+              -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl@3
+              -DOPENSSL_INCLUDE_DIR=/usr/local/opt/openssl@3/include
+              -DOPENSSL_CRYPTO_LIBRARY=/usr/local/opt/openssl@3/lib/libcrypto.dylib
+              -DOPENSSL_SSL_LIBRARY=/usr/local/opt/openssl@3/lib/libssl.dylib
+              -DCMAKE_C_FLAGS="-arch x86_64 -mmacosx-version-min=10.12"
+              -DCMAKE_CXX_FLAGS="-arch x86_64 -mmacosx-version-min=10.12")
+          fi
+
+          # Initial configure to fetch picotls
+          cmake "${CMAKE_ARGS[@]}" || true
+
+          # Patch picotls CMake version requirement
+          PTLS_CMAKE="$PICOQUIC_BUILD_DIR/_deps/picotls-src/CMakeLists.txt"
+          if [ -f "$PTLS_CMAKE" ]; then
+            sed -i '' 's/CMAKE_MINIMUM_REQUIRED(VERSION [0-9.]*)/CMAKE_MINIMUM_REQUIRED(VERSION 3.15)/' "$PTLS_CMAKE" || true
+          fi
+
+          # Reconfigure and build
+          cmake "${CMAKE_ARGS[@]}"
+
+          # Build targets
+          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+            cmake --build "$PICOQUIC_BUILD_DIR" --target picoquic-core picotls-core picotls-fusion picotls-minicrypto picotls-openssl
+          else
+            cmake --build "$PICOQUIC_BUILD_DIR" --target picoquic-core picotls-core picotls-minicrypto picotls-openssl
+            # Create dummy fusion library for ARM64
+            PTLS_BUILD_DIR="$PICOQUIC_BUILD_DIR/_deps/picotls-build"
+            echo 'void picotls_fusion_placeholder(void) {}' | cc -c -x c - -o /tmp/dummy.o
+            ar rcs "$PTLS_BUILD_DIR/libpicotls-fusion.a" /tmp/dummy.o
+          fi
+
+          echo "PICOQUIC_DIR=$PICOQUIC_DIR" >> $GITHUB_ENV
+          echo "PICOQUIC_BUILD_DIR=$PICOQUIC_BUILD_DIR" >> $GITHUB_ENV
+
+      - name: Build picoquic (Windows)
+        if: runner.os == 'Windows'
+        working-directory: slipstream-rust
+        shell: bash
+        run: |
+          PICOQUIC_DIR="${GITHUB_WORKSPACE}/slipstream-rust/vendor/picoquic"
+          PICOQUIC_BUILD_DIR="${GITHUB_WORKSPACE}/slipstream-rust/.picoquic-build"
+          OPENSSL_PATH=$(echo "${OPENSSL_DIR:-}" | sed 's|\\|/|g')
+
+          CRYPTO_LIB=$(find "$OPENSSL_PATH/lib" -name "libcrypto*.lib" 2>/dev/null | head -1)
+          SSL_LIB=$(find "$OPENSSL_PATH/lib" -name "libssl*.lib" 2>/dev/null | head -1)
+          WINCOMPAT_H="${PICOQUIC_DIR}/picoquic/wincompat.h"
+
+          CMAKE_ARGS=(-S "$PICOQUIC_DIR" -B "$PICOQUIC_BUILD_DIR"
+            -G "Visual Studio 17 2022" -A x64
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            -DPICOQUIC_FETCH_PTLS=ON
+            -DBUILD_TESTING=OFF
+            -DCMAKE_C_FLAGS="/D_WINDOWS /FI\"${WINCOMPAT_H}\" /FI\"ws2tcpip.h\""
+            -DCMAKE_CXX_FLAGS="/D_WINDOWS /FI\"${WINCOMPAT_H}\" /FI\"ws2tcpip.h\""
+            -Dpicoquic_BUILD_TESTS=OFF
+            -Wno-dev)
+
+          if [ -n "$CRYPTO_LIB" ] && [ -n "$SSL_LIB" ]; then
+            CMAKE_ARGS+=(
+              -DOPENSSL_ROOT_DIR="$OPENSSL_PATH"
+              -DOPENSSL_CRYPTO_LIBRARY="$CRYPTO_LIB"
+              -DOPENSSL_SSL_LIBRARY="$SSL_LIB"
+              -DOPENSSL_INCLUDE_DIR="$OPENSSL_PATH/include")
+          fi
+
+          # Initial configure to fetch picotls
+          cmake "${CMAKE_ARGS[@]}" || true
+
+          # Patch picotls CMake version if needed
+          PTLS_SRC="$PICOQUIC_BUILD_DIR/_deps/picotls-src"
+          PTLS_CMAKE="$PTLS_SRC/CMakeLists.txt"
+          if [ -f "$PTLS_CMAKE" ]; then
+            sed -i 's/CMAKE_MINIMUM_REQUIRED(VERSION [0-9.]*)/CMAKE_MINIMUM_REQUIRED(VERSION 3.15)/' "$PTLS_CMAKE" || true
+          fi
+
+          # Copy wincompat.h to picotls directories
+          WINCOMPAT_FILE=$(find "$PTLS_SRC" -name "wincompat.h" 2>/dev/null | head -1)
+          if [ -n "$WINCOMPAT_FILE" ]; then
+            cp "$WINCOMPAT_FILE" "$PTLS_SRC/include/" 2>/dev/null || true
+            cp "$WINCOMPAT_FILE" "$PTLS_SRC/lib/" 2>/dev/null || true
+          fi
+
+          # Patch picoquic header for Windows function signature
+          PICOQUIC_HEADER="${PICOQUIC_DIR}/picoquic/picoquic_packet_loop.h"
+          if [ -f "$PICOQUIC_HEADER" ]; then
+            awk '/^void\* picoquic_packet_loop_v3\(void\* v_ctx\);$/ {
+              print "#ifdef _WINDOWS"
+              print "DWORD WINAPI picoquic_packet_loop_v3(LPVOID v_ctx);"
+              print "#else"
+              print "void* picoquic_packet_loop_v3(void* v_ctx);"
+              print "#endif"
+              next
+            } {print}' "$PICOQUIC_HEADER" > "${PICOQUIC_HEADER}.tmp" && mv "${PICOQUIC_HEADER}.tmp" "$PICOQUIC_HEADER"
+          fi
+
+          # Build
+          cmake "${CMAKE_ARGS[@]}"
+          cmake --build "$PICOQUIC_BUILD_DIR" --config Release \
+            --target picoquic-core picotls-core picotls-fusion picotls-minicrypto picotls-openssl
+
+          # Create .a symlinks for build.rs (expects Unix library names)
+          RELEASE_DIR="$PICOQUIC_BUILD_DIR/Release"
+          PTLS_RELEASE="${PICOQUIC_BUILD_DIR}/_deps/picotls-build/Release"
+
+          for lib in picoquic-core picotls-core picotls-fusion picotls-minicrypto picotls-openssl; do
+            src_dir="$RELEASE_DIR"
+            [ "$lib" != "picoquic-core" ] && src_dir="$PTLS_RELEASE"
+            if [ -f "$src_dir/${lib}.lib" ]; then
+              cp "$src_dir/${lib}.lib" "$RELEASE_DIR/lib${lib}.a"
+              cp "$src_dir/${lib}.lib" "$RELEASE_DIR/lib${lib//-/_}.a"
+            fi
+          done
+
+          echo "PICOQUIC_DIR=$PICOQUIC_DIR" >> $GITHUB_ENV
+          echo "PICOQUIC_BUILD_DIR=$PICOQUIC_BUILD_DIR" >> $GITHUB_ENV
+          echo "PICOQUIC_LIB_DIR=$RELEASE_DIR" >> $GITHUB_ENV
+
+      - name: Apply patches for macOS
+        if: runner.os == 'macOS'
+        working-directory: slipstream-rust
+        shell: bash
+        run: |
+          # Patch slipstream-ffi cross compiler env handling (x86_64 only)
+          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+            CC_RS="crates/slipstream-ffi/build/cc.rs"
+            if [ -f "$CC_RS" ]; then
+              # Check if already patched
+              if ! grep -q "CC_\"" "$CC_RS" && ! grep -q "CC_{target_key}" "$CC_RS"; then
+                perl -i -pe '
+                  if (/^pub\(crate\) fn resolve_cc\(target: &str\) -> String \{$/) {
+                      $_ .= "\n    let target_key = target.replace('\''-'\'', \"_\");\n    let cc_target_key = format!(\"CC_{}\", target_key);\n    if let Ok(cc) = env::var(&cc_target_key) {\n        return cc;\n    }";
+                  }
+                ' "$CC_RS"
+
+                perl -i -pe '
+                  if (/^pub\(crate\) fn resolve_ar\(target: &str, cc: &str\) -> String \{$/) {
+                      $_ .= "\n    let target_key = target.replace('\''-'\'', \"_\");\n    let ar_target_key = format!(\"AR_{}\", target_key);\n    if let Ok(ar) = env::var(&ar_target_key) {\n        return ar;\n    }";
+                  }
+                ' "$CC_RS"
+              fi
+            fi
+          fi
+
+          # Patch macOS sockaddr compatibility
+          for file in "crates/slipstream-ffi/src/runtime.rs" "crates/slipstream-server/src/server.rs" "crates/slipstream-server/src/udp_fallback.rs"; do
+            if [ -f "$file" ] && ! grep -q "sin_len:" "$file"; then
+              perl -i -pe 's/(let sockaddr = libc::sockaddr_in \{)/$1\n                sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,/' "$file"
+              perl -i -pe 's/(let sockaddr = libc::sockaddr_in6 \{)/$1\n                sin6_len: std::mem::size_of::<libc::sockaddr_in6>() as u8,/' "$file"
+            fi
+          done
+
+      - name: Apply patches for Windows
+        if: runner.os == 'Windows'
+        working-directory: slipstream-rust
+        shell: bash
+        run: |
+          # Patch picoquic headers
+          PICOQUIC_DIR="${GITHUB_WORKSPACE}/slipstream-rust/vendor/picoquic"
+
+          # Update Windows check to include MinGW defines
+          sed -i 's/#ifdef _WINDOWS/#if defined(_WINDOWS) || defined(__WIN32__) || defined(__MINGW32__) || defined(_WIN32)/' \
+            "$PICOQUIC_DIR/picoquic/picoquic.h" || true
+
+          # Patch headers that include arpa/inet.h directly
+          HEADER_FILE="${PICOQUIC_DIR}/picoquic/picosocks.h"
+          if [ -f "$HEADER_FILE" ]; then
+            awk '{
+              if ($0 == "#include <arpa/inet.h>") {
+                print "#if defined(_WINDOWS) || defined(__WIN32__) || defined(__MINGW32__) || defined(_WIN32)"
+                print "#include <winsock2.h>"
+                print "#else"
+                print "#include <arpa/inet.h>"
+                print "#endif"
+              } else { print }
+            }' "$HEADER_FILE" > "${HEADER_FILE}.tmp" && mv "${HEADER_FILE}.tmp" "$HEADER_FILE"
+          fi
+
+          # Patch build.rs for Windows
+          BUILD_RS="crates/slipstream-ffi/build.rs"
+          if [ -f "$BUILD_RS" ]; then
+            # Add is_windows definition after target
+            sed -i 's/let target = env::var("TARGET").unwrap_or_default();/let target = env::var("TARGET").unwrap_or_default();\n    let is_windows = target.contains("windows") || target.contains("pc-windows");/' "$BUILD_RS"
+
+            # Replace ssl/crypto linking with Windows-aware version
+            sed -i 's/println!("cargo:rustc-link-lib=dylib=ssl");/if is_windows {\n        if let Ok(openssl_lib_dir) = env::var("OPENSSL_LIB_DIR") {\n            println!("cargo:rustc-link-search=native={}", openssl_lib_dir);\n        }\n        println!("cargo:rustc-link-lib=dylib=libssl");\n        println!("cargo:rustc-link-lib=dylib=libcrypto");\n    } else {\n        println!("cargo:rustc-link-lib=dylib=ssl");\n        println!("cargo:rustc-link-lib=dylib=crypto");\n    }/' "$BUILD_RS"
+            sed -i '/println!("cargo:rustc-link-lib=dylib=crypto");/d' "$BUILD_RS"
+
+            # Replace pthread with ws2_32 on Windows
+            sed -i 's/println!("cargo:rustc-link-lib=dylib=pthread");/if is_windows {\n        println!("cargo:rustc-link-lib=dylib=ws2_32");\n    } else {\n        println!("cargo:rustc-link-lib=dylib=pthread");\n    }/' "$BUILD_RS"
+          fi
+
+      - name: Build slipstream binaries
+        if: runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu', matrix.target)
+        working-directory: slipstream-rust
+        shell: bash
+        env:
+          PICOQUIC_FETCH_PTLS: ON
+          PICOQUIC_AUTO_BUILD: 1
+        run: |
+          # macOS ARM64 native build
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            export OPENSSL_LIB_DIR=/opt/homebrew/opt/openssl@3/lib
+            export OPENSSL_INCLUDE_DIR=/opt/homebrew/opt/openssl@3/include
+            export CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-L/opt/homebrew/opt/openssl@3/lib"
+          fi
+
+          # macOS Intel cross-compilation from ARM64 runner
+          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
+            export MACOSX_DEPLOYMENT_TARGET=10.12
+            mkdir -p /tmp/cross-bin
+            printf '#!/bin/bash\nexec clang -arch x86_64 -mmacosx-version-min=10.12 "$@"\n' > /tmp/cross-bin/x86_64-cc
+            printf '#!/bin/bash\nexec clang++ -arch x86_64 -mmacosx-version-min=10.12 "$@"\n' > /tmp/cross-bin/x86_64-c++
+            chmod +x /tmp/cross-bin/x86_64-cc /tmp/cross-bin/x86_64-c++
+
+            export CC_x86_64_apple_darwin=/tmp/cross-bin/x86_64-cc
+            export CXX_x86_64_apple_darwin=/tmp/cross-bin/x86_64-c++
+            export CFLAGS_x86_64_apple_darwin="-arch x86_64 -mmacosx-version-min=10.12"
+            export CXXFLAGS_x86_64_apple_darwin="-arch x86_64 -mmacosx-version-min=10.12"
+            export OPENSSL_LIB_DIR=/usr/local/opt/openssl@3/lib
+            export OPENSSL_INCLUDE_DIR=/usr/local/opt/openssl@3/include
+            export CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-L/usr/local/opt/openssl@3/lib -C link-arg=-arch -C link-arg=x86_64"
+          fi
+
+          # Use vendored OpenSSL for Windows; Linux alternate arches use Docker
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server --features openssl-vendored
+          else
+            cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server
+          fi
+
+      - name: Prepare binaries
+        shell: bash
+        run: |
+          set -e
+          mkdir -p build_assets
+          
+          TARGET_DIR="slipstream-rust/target/${{ matrix.target }}/release"
+          CLIENT_BIN="$TARGET_DIR/slipstream-client${{ env.EXE_EXT }}"
+          SERVER_BIN="$TARGET_DIR/slipstream-server${{ env.EXE_EXT }}"
+          
+          echo "Checking for binaries..."
+          echo "Target directory: $TARGET_DIR"
+          echo "Client binary: $CLIENT_BIN"
+          echo "Server binary: $SERVER_BIN"
+          
+          # Check if target directory exists
+          if [ ! -d "$TARGET_DIR" ]; then
+            echo "ERROR: Target directory does not exist: $TARGET_DIR"
+            echo "Contents of slipstream-rust/target/:"
+            ls -la "slipstream-rust/target/" || true
+            exit 1
+          fi
+          
+          # Check for client binary
+          if [ ! -f "$CLIENT_BIN" ]; then
+            echo "ERROR: Client binary not found at $CLIENT_BIN"
+            echo "Looking for files matching 'slipstream-client*':"
+            find "$TARGET_DIR" -name "slipstream-client*" -type f || true
+            exit 1
+          fi
+          
+          # Check for server binary
+          if [ ! -f "$SERVER_BIN" ]; then
+            echo "ERROR: Server binary not found at $SERVER_BIN"
+            echo "Looking for files matching 'slipstream-server*':"
+            find "$TARGET_DIR" -name "slipstream-server*" -type f || true
+            exit 1
+          fi
+          
+          echo "Copying binaries..."
+          cp "$CLIENT_BIN" "build_assets/slipstream-client-${{ env.ASSET_NAME }}${{ env.EXE_EXT }}"
+          cp "$SERVER_BIN" "build_assets/slipstream-server-${{ env.ASSET_NAME }}${{ env.EXE_EXT }}"
+          [ "${{ runner.os }}" != "Windows" ] && chmod +x build_assets/*
+          echo "Binaries prepared successfully"
+
+      - name: Create release if needed
+        shell: bash
+        env:
+         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+         if [[ "${{ github.ref_type }}" == "tag" ]]; then
+           TAG="${{ github.ref_name }}"
+         else
+           TAG="${{ steps.get_commit.outputs.short_commit }}"
+         fi
+         if ! gh release view "$TAG" &>/dev/null; then
+           gh release create "$TAG" \
+             --title "Release $TAG" \
+             --notes "Release for slipstream-rust commit $TAG
+        
+         This release contains prebuilt binaries for:
+         - **Linux**: x86_64 (amd64), ARM64 (aarch64), ARMv7, RISC-V 64, MIPS64, MIPS64LE, MIPS, MIPSLE
+         - **Windows**: x86_64 (amd64)
+         - **macOS**: ARM64 (Apple Silicon), Intel x86_64"
+         fi
+
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+         repo_token: ${{ secrets.GITHUB_TOKEN }}
+         file: build_assets/slipstream-*
+         file_glob: true
+         tag: ${{ github.ref_type == 'tag' && github.ref_name || steps.get_commit.outputs.short_commit }}
+         overwrite: true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: slipstream-${{ env.ASSET_NAME }}
+          path: build_assets/slipstream-*
+          retention-days: 7
