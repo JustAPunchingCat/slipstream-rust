@@ -28,11 +28,18 @@ pub(crate) fn build_picoquic(
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join(".picoquic-build"));
 
-    let mut command = Command::new(script);
+    let mut command = if cfg!(windows) {
+        let mut cmd = Command::new("sh");
+        cmd.arg(script);
+        cmd
+    } else {
+        Command::new(script)
+    };
     command
         .env("PICOQUIC_DIR", picoquic_dir)
         .env("PICOQUIC_BUILD_DIR", build_dir)
-        .env("PICOQUIC_TARGET", target);
+        .env("PICOQUIC_TARGET", target)
+        .env("CARGO_FEATURE_PICOQUIC_MINIMAL_BUILD", "1");
     if target.contains("android") {
         if let Ok(value) = env::var("ANDROID_NDK_HOME") {
             command.env("ANDROID_NDK_HOME", value);
@@ -184,38 +191,51 @@ pub(crate) fn locate_picotls_include_dir() -> Option<PathBuf> {
 }
 
 pub(crate) fn resolve_picoquic_libs(dir: &Path) -> Option<PicoquicLibs> {
-    if let Some(libs) = resolve_picoquic_libs_single_dir(dir) {
+    let config_subdir = if cfg!(target_env = "msvc") {
+        match env::var("PROFILE").as_deref() {
+            Ok("release") => Some("Release"),
+            _ => Some("Debug"),
+        }
+    } else {
+        None
+    };
+    let picoquic_search_dir = config_subdir.map(|s| dir.join(s)).unwrap_or_else(|| dir.to_path_buf());
+
+    if let Some(libs) = resolve_picoquic_libs_single_dir(&picoquic_search_dir) {
         return Some(PicoquicLibs {
-            search_dirs: vec![dir.to_path_buf()],
+            search_dirs: vec![picoquic_search_dir],
             libs,
         });
     }
 
-    let mut picotls_dirs = vec![dir.join("_deps").join("picotls-build")];
+    let mut picotls_base_dirs = vec![dir.join("_deps").join("picotls-build")];
     if let Some(parent) = dir.parent() {
-        picotls_dirs.push(parent.join("_deps").join("picotls-build"));
+        picotls_base_dirs.push(parent.join("_deps").join("picotls-build"));
     }
-    for picotls_dir in picotls_dirs {
-        if let Some(libs) = resolve_picoquic_libs_split(dir, &picotls_dir) {
-            let mut search_dirs = vec![dir.to_path_buf()];
-            if picotls_dir != dir && !search_dirs.contains(&picotls_dir) {
-                search_dirs.push(picotls_dir);
+    for picotls_base_dir in picotls_base_dirs {
+        let picotls_search_dir = config_subdir.map(|s| picotls_base_dir.join(s)).unwrap_or_else(|| picotls_base_dir.to_path_buf());
+        if let Some(libs) = resolve_picoquic_libs_split(&picoquic_search_dir, &picotls_search_dir) {
+            let mut search_dirs = vec![picoquic_search_dir.clone()];
+            if picotls_search_dir != picoquic_search_dir && !search_dirs.contains(&picotls_search_dir) {
+                search_dirs.push(picotls_search_dir);
             }
             return Some(PicoquicLibs { search_dirs, libs });
         }
     }
 
     if let Some(parent) = dir.parent() {
-        if let Some(libs) = resolve_picoquic_libs_split(parent, dir) {
+        let parent_search_dir = config_subdir.map(|s| parent.join(s)).unwrap_or_else(|| parent.to_path_buf());
+        if let Some(libs) = resolve_picoquic_libs_split(&parent_search_dir, &picoquic_search_dir) {
             return Some(PicoquicLibs {
-                search_dirs: vec![parent.to_path_buf(), dir.to_path_buf()],
+                search_dirs: vec![parent_search_dir, picoquic_search_dir],
                 libs,
             });
         }
         if let Some(grandparent) = parent.parent() {
-            if let Some(libs) = resolve_picoquic_libs_split(grandparent, dir) {
+            let grandparent_search_dir = config_subdir.map(|s| grandparent.join(s)).unwrap_or_else(|| grandparent.to_path_buf());
+            if let Some(libs) = resolve_picoquic_libs_split(&grandparent_search_dir, &picoquic_search_dir) {
                 return Some(PicoquicLibs {
-                    search_dirs: vec![grandparent.to_path_buf(), dir.to_path_buf()],
+                    search_dirs: vec![grandparent_search_dir, picoquic_search_dir],
                     libs,
                 });
             }
@@ -272,11 +292,16 @@ fn resolve_picoquic_libs_split(
 }
 
 fn find_lib_variant<'a>(dir: &Path, underscored: &'a str, hyphenated: &'a str) -> Option<&'a str> {
-    let underscored_path = dir.join(format!("lib{}.a", underscored));
+    let (prefix, extension) = if cfg!(target_env = "msvc") {
+        ("", "lib")
+    } else {
+        ("lib", "a")
+    };
+    let underscored_path = dir.join(format!("{}{}.{}", prefix, underscored, extension));
     if underscored_path.exists() {
         return Some(underscored);
     }
-    let hyphen_path = dir.join(format!("lib{}.a", hyphenated));
+    let hyphen_path = dir.join(format!("{}{}.{}", prefix, hyphenated, extension));
     if hyphen_path.exists() {
         return Some(hyphenated);
     }

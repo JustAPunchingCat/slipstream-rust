@@ -1,6 +1,6 @@
 use crate::error::ClientError;
 use slipstream_core::net::{bind_first_resolved, bind_tcp_listener_addr, bind_udp_socket_addr};
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use tokio::net::{TcpListener as TokioTcpListener, UdpSocket as TokioUdpSocket};
 
 pub(crate) fn compute_mtu(domain_len: usize) -> Result<u32, ClientError> {
@@ -19,8 +19,16 @@ pub(crate) fn compute_mtu(domain_len: usize) -> Result<u32, ClientError> {
 }
 
 pub(crate) async fn bind_udp_socket() -> Result<TokioUdpSocket, ClientError> {
-    let bind_addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
-    bind_udp_socket_addr(bind_addr, "UDP socket").map_err(map_io)
+    // Try IPv6 dual-stack first (works on most systems), fall back to IPv4
+    let bind_addr_v6 = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
+    match bind_udp_socket_addr(bind_addr_v6, "UDP socket") {
+        Ok(socket) => Ok(socket),
+        Err(_) => {
+            // Fall back to IPv4 if IPv6 is not available (common on Windows)
+            let bind_addr_v4 = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+            bind_udp_socket_addr(bind_addr_v4, "UDP socket").map_err(map_io)
+        }
+    }
 }
 
 pub(crate) async fn bind_tcp_listener(
