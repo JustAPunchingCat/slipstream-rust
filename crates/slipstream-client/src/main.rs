@@ -7,7 +7,7 @@ mod streams;
 
 use clap::{parser::ValueSource, ArgGroup, CommandFactory, FromArgMatches, Parser};
 use slipstream_core::{
-    cli::{exit_with_error, exit_with_message, init_logging, unwrap_or_exit},
+    cli::{exit_with_error, exit_with_message, init_logging, parse_hex_u8, set_config, unwrap_or_exit},
     normalize_domain, parse_host_port, parse_host_port_parts, sip003, AddressKind, HostPort,
 };
 use slipstream_ffi::{ClientConfig, ResolverMode, ResolverSpec};
@@ -56,6 +56,10 @@ struct Args {
     keep_alive_interval: u16,
     #[arg(long = "debug-poll")]
     debug_poll: bool,
+    #[arg(long = "mtu", default_value_t = 0)]
+    mtu: u32,
+    #[arg(long = "xor-key", default_value = "0", value_parser = parse_hex_u8)]
+    xor_key: u8,
     #[arg(long = "debug-streams")]
     debug_streams: bool,
 }
@@ -64,6 +68,14 @@ fn main() {
     init_logging();
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
+
+    set_config(args.mtu, args.xor_key);
+    tracing::info!(
+        "Slipstream Client Config: MTU={} (0=Auto), XOR_KEY=0x{:02X}",
+        args.mtu,
+        args.xor_key
+    );
+
     let sip003_env = unwrap_or_exit(sip003::read_sip003_env(), "SIP003 env error", 2);
     if sip003_env.is_present() {
         tracing::info!("SIP003 env detected; applying SS_* overrides with CLI precedence");
