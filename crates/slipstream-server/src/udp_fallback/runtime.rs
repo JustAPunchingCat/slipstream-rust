@@ -18,7 +18,7 @@ use crate::streams::{
     acceptor::ClientAcceptor, client_callback, drain_commands, drain_stream_data, handle_command,
     ClientState, Command,
 };
-use slipstream_core::{cli::{get_mtu, get_obfuscation_key}, net::is_transient_udp_error, normalize_dual_stack_addr};
+use slipstream_core::{cli::get_mtu, net::is_transient_udp_error, normalize_dual_stack_addr};
 use slipstream_dns::{build_qname, encode_query, QueryParams, CLASS_IN, RR_TXT};
 use slipstream_ffi::{
     configure_quic_with_custom,
@@ -69,18 +69,10 @@ fn drain_disconnected_commands(command_rx: &mut mpsc::UnboundedReceiver<Command>
 }
 
 pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
-    let computed_mtu = compute_mtu(config.domain.len())?;
-    let configured_mtu = get_mtu();
-    let mtu = if configured_mtu > 0 {
-        if configured_mtu > computed_mtu {
-            warn!("Configured MTU {} is too large for DNS transport (max: {}); clamping to max.", configured_mtu, computed_mtu);
-            computed_mtu
-        } else {
-            configured_mtu
-        }
-    } else {
-        computed_mtu
-    };
+    let mut mtu = get_mtu();
+    if mtu == 0 {
+        mtu = compute_mtu(config.domain.len())?;
+    }
     let udp = bind_udp_socket().await?;
 
     let (command_tx, mut command_rx) = mpsc::unbounded_channel();
@@ -314,8 +306,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
             } else {
                 delay_us.max(1)
             };
-            let jitter = (unsafe { picoquic_current_time() } % 5000) as u64;
-            let timeout = Duration::from_micros(timeout_us + jitter);
+            let timeout = Duration::from_micros(timeout_us);
 
             tokio::select! {
                 command = command_rx.recv() => {
@@ -423,12 +414,6 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                     }
                 }
 
-                let key = get_obfuscation_key();
-                if key != 0 {
-                    for i in 0..send_length {
-                        send_buf[i] ^= key;
-                    }
-                }
                 let qname = build_qname(&send_buf[..send_length], config.domain)
                     .map_err(|err| ClientError::new(err.to_string()))?;
                 let params = QueryParams {
@@ -443,7 +428,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                 };
                 dns_id = dns_id.wrapping_add(1);
                 let packet =
-                    encode_query(&params, key).map_err(|err| ClientError::new(err.to_string()))?;
+                    encode_query(&params).map_err(|err| ClientError::new(err.to_string()))?;
 
                 let dest = sockaddr_storage_to_socket_addr(&addr_to)?;
                 let dest = normalize_dual_stack_addr(dest);

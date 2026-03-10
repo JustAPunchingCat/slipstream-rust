@@ -1,6 +1,7 @@
 use crate::config::{ensure_cert_key, load_or_create_reset_seed, ResetSeed};
 use crate::udp_fallback::{handle_packet, FallbackManager, PacketContext, MAX_UDP_PACKET_SIZE};
 use slipstream_core::{
+    cli::{get_mtu, get_obfuscation_key},
     net::{bind_first_resolved, bind_udp_socket_addr, is_transient_udp_error},
     normalize_dual_stack_addr, resolve_host_port, HostPort,
 };
@@ -243,7 +244,9 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 "Slipstream server congestion algorithm is unavailable",
             ));
         }
-        configure_quic_with_custom(quic, slipstream_server_cc_algorithm, QUIC_MTU);
+        let mtu = get_mtu();
+        let mtu = if mtu > 0 { mtu } else { QUIC_MTU };
+        configure_quic_with_custom(quic, slipstream_server_cc_algorithm, mtu);
     }
 
     let udp = Arc::new(bind_udp_socket(&config.dns_listen_host, config.dns_listen_port).await?);
@@ -461,7 +464,7 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 question: &slot.question,
                 payload,
                 rcode,
-            })
+            }, get_obfuscation_key())
             .map_err(|err| ServerError::new(err.to_string()))?;
             let peer = if map_ipv4_peers {
                 normalize_dual_stack_addr(slot.peer)

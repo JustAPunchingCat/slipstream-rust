@@ -25,9 +25,8 @@ pub(crate) fn handle_dns_response(
     ctx: &mut DnsResponseContext<'_>,
 ) -> Result<(), ClientError> {
     let peer = normalize_dual_stack_addr(peer);
-    let key = get_obfuscation_key();
-    let response_id = dns_response_id(buf, key);
-    if let Some(payload) = decode_response(buf, key) {
+    let response_id = dns_response_id(buf);
+    if let Some(payload) = decode_response(buf, get_obfuscation_key()) {
         let resolver_index = ctx
             .resolvers
             .iter()
@@ -114,19 +113,12 @@ fn find_resolver_by_addr(
     resolvers.iter_mut().find(|resolver| resolver.addr == peer)
 }
 
-fn dns_response_id(packet: &[u8], xor_key: u8) -> Option<u16> {
+fn dns_response_id(packet: &[u8]) -> Option<u16> {
     if packet.len() < 12 {
         return None;
     }
-    let mut header_bytes = [0u8; 4];
-    header_bytes.copy_from_slice(&packet[..4]);
-    if xor_key != 0 {
-        for b in &mut header_bytes {
-            *b ^= xor_key;
-        }
-    }
-    let id = u16::from_be_bytes([header_bytes[0], header_bytes[1]]);
-    let flags = u16::from_be_bytes([header_bytes[2], header_bytes[3]]);
+    let id = u16::from_be_bytes([packet[0], packet[1]]);
+    let flags = u16::from_be_bytes([packet[2], packet[3]]);
     if flags & 0x8000 == 0 {
         return None;
     }

@@ -13,7 +13,7 @@ fn build_dns_query(name: &str) -> Vec<u8> {
         cd: false,
         qdcount: 1,
         is_query: true,
-    })
+    }, None)
     .expect("dns query")
 }
 

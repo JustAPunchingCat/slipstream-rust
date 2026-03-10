@@ -11,25 +11,32 @@ use crate::wire::{
     write_u32,
 };
 
-pub fn decode_query(packet: &[u8], domain: &str, xor_key: u8) -> Result<DecodedQuery, DecodeQueryError> {
+pub fn decode_query(
+    packet: &[u8],
+    domain: &str,
+    xor_key: Option<u8>,
+) -> Result<DecodedQuery, DecodeQueryError> {
     decode_query_with_domains(packet, &[domain], xor_key)
 }
 
 pub fn decode_query_with_domains(
     packet: &[u8],
     domains: &[&str],
-    xor_key: u8,
+    xor_key: Option<u8>,
 ) -> Result<DecodedQuery, DecodeQueryError> {
-    let mut packet_buf = Vec::with_capacity(packet.len());
-    packet_buf.extend_from_slice(packet);
-    if xor_key != 0 {
-        for i in 0..std::cmp::min(packet_buf.len(), 16) {
-            packet_buf[i] ^= xor_key;
+    let maybe_unmasked_packet;
+    let packet_to_process = if let Some(key) = xor_key {
+        let mut buf = packet.to_vec();
+        for i in 0..std::cmp::min(buf.len(), 16) {
+            buf[i] ^= key;
         }
-    }
-    let packet = &packet_buf;
+        maybe_unmasked_packet = buf;
+        &maybe_unmasked_packet
+    } else {
+        packet
+    };
 
-    let header = match parse_header(packet) {
+    let header = match parse_header(packet_to_process) {
         Some(header) => header,
         None => return Err(DecodeQueryError::Drop),
     };
@@ -38,7 +45,7 @@ pub fn decode_query_with_domains(
     let cd = header.cd;
 
     if header.is_response {
-        let question = parse_question_for_reply(packet, header.qdcount, header.offset)?;
+        let question = parse_question_for_reply(packet_to_process, header.qdcount, header.offset)?;
         return Err(DecodeQueryError::Reply {
             id: header.id,
             rd,
@@ -49,7 +56,7 @@ pub fn decode_query_with_domains(
     }
 
     if header.qdcount != 1 {
-        let question = parse_question_for_reply(packet, header.qdcount, header.offset)?;
+        let question = parse_question_for_reply(packet_to_process, header.qdcount, header.offset)?;
         return Err(DecodeQueryError::Reply {
             id: header.id,
             rd,
@@ -59,7 +66,7 @@ pub fn decode_query_with_domains(
         });
     }
 
-    let question = match parse_question(packet, header.offset) {
+    let question = match parse_question(packet_to_process, header.offset) {
         Ok((question, _)) => question,
         Err(_) => return Err(DecodeQueryError::Drop),
     };
@@ -98,7 +105,7 @@ pub fn decode_query_with_domains(
         });
     }
 
-    let mut payload = match base32::decode(&undotted) {
+    let payload = match base32::decode(&undotted) {
         Ok(payload) => payload,
         Err(_) => {
             return Err(DecodeQueryError::Reply {
@@ -111,12 +118,6 @@ pub fn decode_query_with_domains(
         }
     };
 
-    if xor_key != 0 {
-        for b in &mut payload {
-            *b ^= xor_key;
-        }
-    }
-
     Ok(DecodedQuery {
         id: header.id,
         rd,
@@ -126,7 +127,7 @@ pub fn decode_query_with_domains(
     })
 }
 
-pub fn encode_query(params: &QueryParams<'_>, xor_key: u8) -> Result<Vec<u8>, DnsError> {
+pub fn encode_query(params: &QueryParams<'_>, xor_key: Option<u8>) -> Result<Vec<u8>, DnsError> {
     let mut out = Vec::with_capacity(256);
     let mut flags = 0u16;
     if !params.is_query {
@@ -154,16 +155,16 @@ pub fn encode_query(params: &QueryParams<'_>, xor_key: u8) -> Result<Vec<u8>, Dn
 
     encode_opt_record(&mut out)?;
 
-    if xor_key != 0 {
+    if let Some(key) = xor_key {
         for i in 0..std::cmp::min(out.len(), 16) {
-            out[i] ^= xor_key;
+            out[i] ^= key;
         }
     }
 
     Ok(out)
 }
 
-pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u8>, DnsError> {
+pub fn encode_response(params: &ResponseParams<'_>, xor_key: Option<u8>) -> Result<Vec<u8>, DnsError> {
     let payload_len = params.payload.map(|payload| payload.len()).unwrap_or(0);
 
     let mut rcode = params.rcode.unwrap_or(if payload_len > 0 {
@@ -217,13 +218,7 @@ pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u
             while remaining > 0 {
                 let chunk_len = remaining.min(255);
                 out.push(chunk_len as u8);
-                if xor_key != 0 {
-                    for i in 0..chunk_len {
-                        out.push(payload[cursor + i] ^ xor_key);
-                    }
-                } else {
-                    out.extend_from_slice(&payload[cursor..cursor + chunk_len]);
-                }
+                out.extend_from_slice(&payload[cursor..cursor + chunk_len]);
                 cursor += chunk_len;
                 remaining -= chunk_len;
             }
@@ -232,26 +227,29 @@ pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u
 
     encode_opt_record(&mut out)?;
 
-    if xor_key != 0 {
+    if let Some(key) = xor_key {
         for i in 0..std::cmp::min(out.len(), 16) {
-            out[i] ^= xor_key;
+            out[i] ^= key;
         }
     }
 
     Ok(out)
 }
 
-pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
-    let mut packet_buf = Vec::with_capacity(packet.len());
-    packet_buf.extend_from_slice(packet);
-    if xor_key != 0 {
-        for i in 0..std::cmp::min(packet_buf.len(), 16) {
-            packet_buf[i] ^= xor_key;
+pub fn decode_response(packet: &[u8], xor_key: Option<u8>) -> Option<Vec<u8>> {
+    let maybe_unmasked_packet;
+    let packet_to_process = if let Some(key) = xor_key {
+        let mut buf = packet.to_vec();
+        for i in 0..std::cmp::min(buf.len(), 16) {
+            buf[i] ^= key;
         }
-    }
-    let packet = &packet_buf;
+        maybe_unmasked_packet = buf;
+        &maybe_unmasked_packet
+    } else {
+        packet
+    };
 
-    let header = parse_header(packet)?;
+    let header = parse_header(packet_to_process)?;
     if !header.is_response {
         return None;
     }
@@ -265,28 +263,28 @@ pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
 
     let mut offset = header.offset;
     for _ in 0..header.qdcount {
-        let (_, new_offset) = parse_name(packet, offset).ok()?;
+        let (_, new_offset) = parse_name(packet_to_process, offset).ok()?;
         offset = new_offset;
-        if offset + 4 > packet.len() {
+        if offset + 4 > packet_to_process.len() {
             return None;
         }
         offset += 4;
     }
 
-    let (_, new_offset) = parse_name(packet, offset).ok()?;
+    let (_, new_offset) = parse_name(packet_to_process, offset).ok()?;
     offset = new_offset;
-    if offset + 10 > packet.len() {
+    if offset + 10 > packet_to_process.len() {
         return None;
     }
-    let qtype = read_u16(packet, offset)?;
+    let qtype = read_u16(packet_to_process, offset)?;
     offset += 2;
-    let _qclass = read_u16(packet, offset)?;
+    let _qclass = read_u16(packet_to_process, offset)?;
     offset += 2;
-    let _ttl = read_u32(packet, offset)?;
+    let _ttl = read_u32(packet_to_process, offset)?;
     offset += 4;
-    let rdlen = read_u16(packet, offset)? as usize;
+    let rdlen = read_u16(packet_to_process, offset)? as usize;
     offset += 2;
-    if offset + rdlen > packet.len() || rdlen < 1 {
+    if offset + rdlen > packet_to_process.len() || rdlen < 1 {
         return None;
     }
     if qtype != RR_TXT {
@@ -297,19 +295,13 @@ pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
     let mut cursor = offset;
     let mut out = Vec::with_capacity(rdlen);
     while remaining > 0 {
-        let txt_len = packet[cursor] as usize;
+        let txt_len = packet_to_process[cursor] as usize;
         cursor += 1;
         remaining -= 1;
         if txt_len > remaining {
             return None;
         }
-        if xor_key != 0 {
-            for i in 0..txt_len {
-                out.push(packet[cursor + i] ^ xor_key);
-            }
-        } else {
-            out.extend_from_slice(&packet[cursor..cursor + txt_len]);
-        }
+        out.extend_from_slice(&packet_to_process[cursor..cursor + txt_len]);
         cursor += txt_len;
         remaining -= txt_len;
     }
@@ -319,15 +311,15 @@ pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
     Some(out)
 }
 
-pub fn is_response(packet: &[u8], xor_key: u8) -> bool {
+pub fn is_response(packet: &[u8], xor_key: Option<u8>) -> bool {
     if packet.len() < 12 {
         return false;
     }
     let mut header_bytes = [0u8; 12];
     header_bytes.copy_from_slice(&packet[..12]);
-    if xor_key != 0 {
+    if let Some(key) = xor_key {
         for b in &mut header_bytes {
-            *b ^= xor_key;
+            *b ^= key;
         }
     }
     parse_header(&header_bytes)
@@ -365,6 +357,6 @@ mod tests {
             payload: Some(&payload),
             rcode: None,
         };
-        assert!(encode_response(&params, 0xFA).is_err());
+        assert!(encode_response(&params, Some(0xFA)).is_err());
     }
 }

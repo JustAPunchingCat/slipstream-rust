@@ -10,3 +10,4 @@ __pycache__/
 # Rust workspace artifacts
 /target/
 **/*.rs.bk
+build.bat
