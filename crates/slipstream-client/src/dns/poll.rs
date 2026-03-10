@@ -87,7 +87,8 @@ pub(crate) async fn send_poll_queries(
         resolver.debug.polls_sent = resolver.debug.polls_sent.saturating_add(1);
 
         let poll_id = *dns_id;
-        let qname = build_qname(&send_buf[..send_length], config.domain)
+        let randomized_domain = randomize_case(config.domain, poll_id);
+        let qname = build_qname(&send_buf[..send_length], &randomized_domain)
             .map_err(|err| ClientError::new(err.to_string()))?;
         let params = QueryParams {
             id: poll_id,
@@ -118,4 +119,22 @@ pub(crate) async fn send_poll_queries(
     }
 
     Ok(())
+}
+
+fn randomize_case(input: &str, seed: u16) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut s = seed as u32;
+    for c in input.chars() {
+        if c.is_ascii_alphabetic() {
+            s = s.wrapping_mul(1103515245).wrapping_add(12345);
+            if (s & 0x40000000) != 0 {
+                result.push(c.to_ascii_uppercase());
+            } else {
+                result.push(c.to_ascii_lowercase());
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
