@@ -198,7 +198,9 @@ pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u
                 let start_idx = out.len();
                 out.extend_from_slice(&payload[cursor..cursor + chunk_len]);
                 if xor_key != 0 {
-                    for b in &mut out[start_idx..] { *b ^= xor_key; }
+                    for b in &mut out[start_idx..] {
+                        *b ^= xor_key;
+                    }
                 }
                 cursor += chunk_len;
                 remaining -= chunk_len;
@@ -272,7 +274,9 @@ pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
         return None;
     }
     if xor_key != 0 {
-        for b in &mut out { *b ^= xor_key; }
+        for b in &mut out {
+            *b ^= xor_key;
+        }
     }
     Some(out)
 }

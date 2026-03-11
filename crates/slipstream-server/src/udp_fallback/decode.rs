@@ -1,13 +1,15 @@
-use super::{FallbackManager, PacketContext};
+use super::{dummy_sockaddr_storage, FallbackManager, PacketContext};
 use crate::server::{ServerError, Slot};
 use slipstream_core::cli::get_obfuscation_key;
 use slipstream_dns::{decode_query_with_domains, DecodeQueryError};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_incoming_packet_ex, picoquic_quic_t, slipstream_disable_ack_delay,
 };
-use slipstream_ffi::take_stateless_packet_for_cid;
 use slipstream_ffi::socket_addr_to_storage;
-use std::net::SocketAddr;
+use slipstream_ffi::take_stateless_packet_for_cid;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 enum DecodeSlotOutcome {
     Slot(Slot),
@@ -71,26 +73,26 @@ fn decode_slot(
     match decode_query_with_domains(packet, domains) {
         Ok(query) => {
             let try_process = |payload: Vec<u8>,
-                                   is_xor_mode: bool|
+                               is_xor_mode: bool|
              -> Option<(Slot, *mut picoquic_cnx_t, libc::c_int)> {
-                let mut peer_storage = socket_addr_to_storage(peer);
+                let mut peer_storage = hash_peer_to_dummy_storage(peer);
                 let mut local_storage = unsafe { std::ptr::read(local_addr_storage) };
                 let mut first_cnx: *mut picoquic_cnx_t = std::ptr::null_mut();
                 let mut first_path: libc::c_int = -1;
 
                 let ret = unsafe {
                     picoquic_incoming_packet_ex(
-                    quic,
-                    payload.as_ptr() as *mut u8,
-                    payload.len(),
-                    &mut peer_storage as *mut _ as *mut libc::sockaddr,
-                    &mut local_storage as *mut _ as *mut libc::sockaddr,
-                    0,
-                    0,
-                    &mut first_cnx,
-                    &mut first_path,
-                    current_time,
-                )
+                        quic,
+                        payload.as_ptr() as *mut u8,
+                        payload.len(),
+                        &mut peer_storage as *mut _ as *mut libc::sockaddr,
+                        &mut local_storage as *mut _ as *mut libc::sockaddr,
+                        0,
+                        0,
+                        &mut first_cnx,
+                        &mut first_path,
+                        current_time,
+                    )
                 };
                 if ret < 0 {
                     return None;
@@ -103,14 +105,14 @@ fn decode_slot(
                         if !resp_payload.is_empty() {
                             return Some((
                                 Slot {
-                            peer,
-                            id: query.id,
-                            rd: query.rd,
-                            cd: query.cd,
-                            question: query.question.clone(),
-                            rcode: None,
-                            cnx: std::ptr::null_mut(),
-                            path_id: -1,
+                                    peer,
+                                    id: query.id,
+                                    rd: query.rd,
+                                    cd: query.cd,
+                                    question: query.question.clone(),
+                                    rcode: None,
+                                    cnx: std::ptr::null_mut(),
+                                    path_id: -1,
                                     payload_override: Some(resp_payload),
                                     xor_mode: is_xor_mode,
                                 },
@@ -124,15 +126,15 @@ fn decode_slot(
 
                 Some((
                     Slot {
-                peer,
-                id: query.id,
-                rd: query.rd,
-                cd: query.cd,
+                        peer,
+                        id: query.id,
+                        rd: query.rd,
+                        cd: query.cd,
                         question: query.question.clone(),
-                rcode: None,
-                cnx: first_cnx,
-                path_id: first_path,
-                payload_override: None,
+                        rcode: None,
+                        cnx: first_cnx,
+                        path_id: first_path,
+                        payload_override: None,
                         xor_mode: is_xor_mode,
                     },
                     first_cnx,
@@ -192,4 +194,26 @@ fn decode_slot(
             }))
         }
     }
+}
+
+fn hash_peer_to_dummy_storage(peer: SocketAddr) -> slipstream_ffi::SockaddrStorage {
+    // Map the real peer address to a deterministic dummy address in 2001:db8::/32.
+    // This ensures picoquic sees a stable address for the handshake while still
+    // allowing distinct paths for multipath (different hashes for different resolvers).
+    // We hash ONLY the IP and use a fixed port to mask DNS source port randomization.
+    let mut hasher = DefaultHasher::new();
+    peer.ip().hash(&mut hasher);
+    let hash = hasher.finish();
+    let addr = Ipv6Addr::new(
+        0x2001,
+        0xdb8,
+        0,
+        0,
+        (hash >> 48) as u16,
+        (hash >> 32) as u16,
+        (hash >> 16) as u16,
+        hash as u16,
+    );
+    let dummy_peer = SocketAddr::new(IpAddr::V6(addr), 12345);
+    socket_addr_to_storage(dummy_peer)
 }

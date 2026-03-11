@@ -2,9 +2,9 @@ use slipstream_ffi::picoquic::picoquic_quic_t;
 #[cfg(not(windows))]
 use slipstream_ffi::socket_addr_to_storage;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 #[cfg(not(windows))]
 use std::net::{IpAddr, Ipv6Addr};
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket as TokioUdpSocket;
