@@ -27,13 +27,7 @@ pub(crate) fn handle_dns_response(
     let peer = normalize_dual_stack_addr(peer);
     let key = get_obfuscation_key();
     let response_id = dns_response_id(buf);
-    if let Some(mut payload) = decode_response(buf) {
-        if key != 0 {
-            for b in &mut payload {
-                *b ^= key;
-            }
-        }
-
+    if let Some(payload) = decode_response(buf, key) {
         let resolver_index = ctx
             .resolvers
             .iter()
@@ -124,7 +118,6 @@ fn dns_response_id(packet: &[u8]) -> Option<u16> {
     if packet.len() < 12 {
         return None;
     }
-    // We are no longer XORing the header, so we can read directly.
     let id = u16::from_be_bytes([packet[0], packet[1]]);
     let flags = u16::from_be_bytes([packet[2], packet[3]]);
     if flags & 0x8000 == 0 {

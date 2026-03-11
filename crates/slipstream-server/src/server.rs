@@ -448,7 +448,7 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
             }
 
             let payload_override = slot.payload_override.as_deref();
-            let (mut payload, rcode) = if let Some(payload) = payload_override {
+            let (payload, rcode) = if let Some(payload) = payload_override {
                 (Some(payload.to_vec()), slot.rcode)
             } else if send_length > 0 {
                 (Some(send_buf[..send_length].to_vec()), slot.rcode)
