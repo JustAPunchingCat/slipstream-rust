@@ -5,7 +5,7 @@ use slipstream_core::{
     net::{bind_first_resolved, bind_udp_socket_addr, is_transient_udp_error},
     normalize_dual_stack_addr, resolve_host_port, HostPort,
 };
-use slipstream_dns::{encode_response, Question, Rcode, ResponseParams};
+use slipstream_dns::{encode_response_with_key, Question, Rcode, ResponseParams};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_create, picoquic_current_time, picoquic_delete_cnx,
     picoquic_get_first_cnx, picoquic_get_next_cnx, picoquic_prepare_packet_ex, picoquic_quic_t,
@@ -467,7 +467,7 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 0
             };
 
-            let response = encode_response(
+            let response = encode_response_with_key(
                 &ResponseParams {
                     id: slot.id,
                     rd: slot.rd,

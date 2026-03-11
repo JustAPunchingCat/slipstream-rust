@@ -141,7 +141,14 @@ pub fn encode_query(params: &QueryParams<'_>) -> Result<Vec<u8>, DnsError> {
     Ok(out)
 }
 
-pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u8>, DnsError> {
+pub fn encode_response(params: &ResponseParams<'_>) -> Result<Vec<u8>, DnsError> {
+    encode_response_with_key(params, 0)
+}
+
+pub fn encode_response_with_key(
+    params: &ResponseParams<'_>,
+    xor_key: u8,
+) -> Result<Vec<u8>, DnsError> {
     let payload_len = params.payload.map(|payload| payload.len()).unwrap_or(0);
 
     let mut rcode = params.rcode.unwrap_or(if payload_len > 0 {
@@ -213,7 +220,11 @@ pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u
     Ok(out)
 }
 
-pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
+pub fn decode_response(packet: &[u8]) -> Option<Vec<u8>> {
+    decode_response_with_key(packet, 0)
+}
+
+pub fn decode_response_with_key(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
     let header = parse_header(packet)?;
     if !header.is_response {
         return None;
@@ -303,7 +314,7 @@ fn encode_opt_record(out: &mut Vec<u8>) -> Result<(), DnsError> {
 
 #[cfg(test)]
 mod tests {
-    use super::encode_response;
+    use super::encode_response_with_key;
     use crate::types::{Question, ResponseParams, CLASS_IN, RR_TXT};
 
     #[test]
@@ -322,6 +333,6 @@ mod tests {
             payload: Some(&payload),
             rcode: None,
         };
-        assert!(encode_response(&params, 0).is_err());
+        assert!(encode_response_with_key(&params, 0).is_err());
     }
 }
