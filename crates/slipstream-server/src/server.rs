@@ -447,26 +447,33 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
             }
 
             let payload_override = slot.payload_override.as_deref();
-            let (payload, rcode) = if let Some(payload) = payload_override {
-                (Some(payload), slot.rcode)
+            let (mut payload, rcode) = if let Some(payload) = payload_override {
+                (Some(payload.to_vec()), slot.rcode)
             } else if send_length > 0 {
-                (Some(&send_buf[..send_length]), slot.rcode)
+                (Some(send_buf[..send_length].to_vec()), slot.rcode)
             } else if slot.rcode.is_none() {
                 // No QUIC payload ready; still answer the poll with NOERROR and empty payload to clear it.
                 (None, Some(slipstream_dns::Rcode::Ok))
             } else {
                 (None, slot.rcode)
             };
+
+            let key = get_obfuscation_key();
+            if key != 0 {
+                if let Some(p) = &mut payload {
+                    for b in p { *b ^= key; }
+                }
+            }
+
             let response = encode_response(
                 &ResponseParams {
                     id: slot.id,
                     rd: slot.rd,
                     cd: slot.cd,
                     question: &slot.question,
-                    payload,
+                    payload: payload.as_deref(),
                     rcode,
                 },
-                get_obfuscation_key(),
             )
             .map_err(|err| ServerError::new(err.to_string()))?;
             let peer = if map_ipv4_peers {

@@ -11,28 +11,14 @@ use crate::wire::{
     write_u32,
 };
 
-pub fn decode_query(
-    packet: &[u8],
-    domain: &str,
-    xor_key: u8,
-) -> Result<DecodedQuery, DecodeQueryError> {
-    decode_query_with_domains(packet, &[domain], xor_key)
+pub fn decode_query(packet: &[u8], domain: &str) -> Result<DecodedQuery, DecodeQueryError> {
+    decode_query_with_domains(packet, &[domain])
 }
 
 pub fn decode_query_with_domains(
     packet: &[u8],
     domains: &[&str],
-    xor_key: u8,
 ) -> Result<DecodedQuery, DecodeQueryError> {
-    let mut packet_buf = Vec::with_capacity(packet.len());
-    packet_buf.extend_from_slice(packet);
-    if xor_key != 0 {
-        for i in 0..std::cmp::min(packet_buf.len(), 16) {
-            packet_buf[i] ^= xor_key;
-        }
-    }
-    let packet = &packet_buf;
-
     let header = match parse_header(packet) {
         Some(header) => header,
         None => return Err(DecodeQueryError::Drop),
@@ -102,7 +88,7 @@ pub fn decode_query_with_domains(
         });
     }
 
-    let mut payload = match base32::decode(&undotted) {
+    let payload = match base32::decode(&undotted) {
         Ok(payload) => payload,
         Err(_) => {
             return Err(DecodeQueryError::Reply {
@@ -115,12 +101,6 @@ pub fn decode_query_with_domains(
         }
     };
 
-    if xor_key != 0 {
-        for b in &mut payload {
-            *b ^= xor_key;
-        }
-    }
-
     Ok(DecodedQuery {
         id: header.id,
         rd,
@@ -130,7 +110,7 @@ pub fn decode_query_with_domains(
     })
 }
 
-pub fn encode_query(params: &QueryParams<'_>, xor_key: u8) -> Result<Vec<u8>, DnsError> {
+pub fn encode_query(params: &QueryParams<'_>) -> Result<Vec<u8>, DnsError> {
     let mut out = Vec::with_capacity(256);
     let mut flags = 0u16;
     if !params.is_query {
@@ -158,16 +138,10 @@ pub fn encode_query(params: &QueryParams<'_>, xor_key: u8) -> Result<Vec<u8>, Dn
 
     encode_opt_record(&mut out)?;
 
-    if xor_key != 0 {
-        for i in 0..std::cmp::min(out.len(), 16) {
-            out[i] ^= xor_key;
-        }
-    }
-
     Ok(out)
 }
 
-pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u8>, DnsError> {
+pub fn encode_response(params: &ResponseParams<'_>) -> Result<Vec<u8>, DnsError> {
     let payload_len = params.payload.map(|payload| payload.len()).unwrap_or(0);
 
     let mut rcode = params.rcode.unwrap_or(if payload_len > 0 {
@@ -221,13 +195,7 @@ pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u
             while remaining > 0 {
                 let chunk_len = remaining.min(255);
                 out.push(chunk_len as u8);
-                if xor_key != 0 {
-                    for i in 0..chunk_len {
-                        out.push(payload[cursor + i] ^ xor_key);
-                    }
-                } else {
-                    out.extend_from_slice(&payload[cursor..cursor + chunk_len]);
-                }
+                out.extend_from_slice(&payload[cursor..cursor + chunk_len]);
                 cursor += chunk_len;
                 remaining -= chunk_len;
             }
@@ -236,25 +204,10 @@ pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u
 
     encode_opt_record(&mut out)?;
 
-    if xor_key != 0 {
-        for i in 0..std::cmp::min(out.len(), 16) {
-            out[i] ^= xor_key;
-        }
-    }
-
     Ok(out)
 }
 
-pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
-    let mut packet_buf = Vec::with_capacity(packet.len());
-    packet_buf.extend_from_slice(packet);
-    if xor_key != 0 {
-        for i in 0..std::cmp::min(packet_buf.len(), 16) {
-            packet_buf[i] ^= xor_key;
-        }
-    }
-    let packet = &packet_buf;
-
+pub fn decode_response(packet: &[u8]) -> Option<Vec<u8>> {
     let header = parse_header(packet)?;
     if !header.is_response {
         return None;
@@ -307,13 +260,7 @@ pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
         if txt_len > remaining {
             return None;
         }
-        if xor_key != 0 {
-            for i in 0..txt_len {
-                out.push(packet[cursor + i] ^ xor_key);
-            }
-        } else {
-            out.extend_from_slice(&packet[cursor..cursor + txt_len]);
-        }
+        out.extend_from_slice(&packet[cursor..cursor + txt_len]);
         cursor += txt_len;
         remaining -= txt_len;
     }
@@ -323,17 +270,8 @@ pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
     Some(out)
 }
 
-pub fn is_response(packet: &[u8], xor_key: u8) -> bool {
-    if packet.len() < 12 {
-        return false;
-    }
-    let mut header_bytes = [0u8; 12];
-    header_bytes.copy_from_slice(&packet[..12]);
-    if xor_key != 0 {
-        for b in &mut header_bytes {
-            *b ^= xor_key;
-        }
-    }
+pub fn is_response(packet: &[u8]) -> bool {
+    let header_bytes = if let Some(bytes) = packet.get(..12) { bytes } else { return false; };
     parse_header(&header_bytes)
         .map(|header| header.is_response)
         .unwrap_or(false)
@@ -369,6 +307,6 @@ mod tests {
             payload: Some(&payload),
             rcode: None,
         };
-        assert!(encode_response(&params, 0xFA).is_err());
+        assert!(encode_response(&params).is_err());
     }
 }

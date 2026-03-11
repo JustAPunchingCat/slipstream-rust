@@ -18,11 +18,7 @@ use crate::streams::{
     acceptor::ClientAcceptor, client_callback, drain_commands, drain_stream_data, handle_command,
     ClientState, Command,
 };
-use slipstream_core::{
-    cli::{get_mtu, get_obfuscation_key},
-    net::is_transient_udp_error,
-    normalize_dual_stack_addr,
-};
+use slipstream_core::{cli::{get_mtu, get_obfuscation_key}, net::is_transient_udp_error, normalize_dual_stack_addr};
 use slipstream_dns::{build_qname, encode_query, QueryParams, CLASS_IN, RR_TXT};
 use slipstream_ffi::{
     configure_quic_with_custom,
@@ -31,11 +27,11 @@ use slipstream_ffi::{
         picoquic_create_client_cnx, picoquic_current_time, picoquic_disable_keep_alive,
         picoquic_enable_keep_alive, picoquic_enable_path_callbacks,
         picoquic_enable_path_callbacks_default, picoquic_get_next_wake_delay,
-        picoquic_prepare_next_packet_ex, picoquic_set_callback, picoquic_set_initial_send_mtu,
-        slipstream_has_ready_stream, slipstream_is_flow_blocked, slipstream_mixed_cc_algorithm,
-        slipstream_set_cc_override, slipstream_set_default_path_mode,
-        PICOQUIC_CONNECTION_ID_MAX_SIZE, PICOQUIC_MAX_PACKET_SIZE, PICOQUIC_PACKET_LOOP_RECV_MAX,
-        PICOQUIC_PACKET_LOOP_SEND_MAX,
+        picoquic_set_initial_send_mtu,
+        picoquic_prepare_next_packet_ex, picoquic_set_callback, slipstream_has_ready_stream,
+        slipstream_is_flow_blocked, slipstream_mixed_cc_algorithm, slipstream_set_cc_override,
+        slipstream_set_default_path_mode, PICOQUIC_CONNECTION_ID_MAX_SIZE,
+        PICOQUIC_MAX_PACKET_SIZE, PICOQUIC_PACKET_LOOP_RECV_MAX, PICOQUIC_PACKET_LOOP_SEND_MAX,
     },
     socket_addr_to_storage, take_crypto_errors, ClientConfig, QuicGuard, ResolverMode,
 };
@@ -78,10 +74,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
     let configured_mtu = get_mtu();
     let mtu = if configured_mtu > 0 {
         if configured_mtu > computed_mtu {
-            warn!(
-                "Configured MTU {} is too large for DNS transport (max: {}); clamping to max.",
-                configured_mtu, computed_mtu
-            );
+            warn!("Configured MTU {} is too large for DNS transport (max: {}); clamping to max.", configured_mtu, computed_mtu);
             computed_mtu
         } else {
             if configured_mtu < 128 {
@@ -345,7 +338,13 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                                 resolvers: &mut resolvers,
                             };
                             handle_dns_response(&recv_buf[..size], peer, &mut response_ctx)?;
-                            for _ in 1..packet_loop_recv_max {
+                            
+                            // We must process multiple packets if available, but we need to be careful
+                            // not to block if the socket is empty.
+                            // The original loop structure was correct for `recvmmsg` style batching,
+                            // but `try_recv_from` is a reasonable approximation for single-packet reads.
+                            let mut packets_processed = 1;
+                            while packets_processed < packet_loop_recv_max {
                                 match udp.try_recv_from(&mut recv_buf) {
                                     Ok((size, peer)) => {
                                         handle_dns_response(&recv_buf[..size], peer, &mut response_ctx)?;
@@ -359,6 +358,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                                         return Err(map_io(err));
                                     }
                                 }
+                                packets_processed += 1;
                             }
                         }
                         Err(err) => {
@@ -455,7 +455,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                 };
                 dns_id = dns_id.wrapping_add(1);
                 let packet =
-                    encode_query(&params, key).map_err(|err| ClientError::new(err.to_string()))?;
+                    encode_query(&params).map_err(|err| ClientError::new(err.to_string()))?;
 
                 let dest = sockaddr_storage_to_socket_addr(&addr_to)?;
                 let dest = normalize_dual_stack_addr(dest);

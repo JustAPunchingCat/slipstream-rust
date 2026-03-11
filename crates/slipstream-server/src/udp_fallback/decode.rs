@@ -67,17 +67,25 @@ fn decode_slot(
     current_time: u64,
     local_addr_storage: &slipstream_ffi::SockaddrStorage,
 ) -> Result<DecodeSlotOutcome, ServerError> {
-    match decode_query_with_domains(packet, domains, xor_key) {
+    match decode_query_with_domains(packet, domains) {
         Ok(query) => {
             let mut peer_storage = dummy_sockaddr_storage();
             let mut local_storage = unsafe { std::ptr::read(local_addr_storage) };
             let mut first_cnx: *mut picoquic_cnx_t = std::ptr::null_mut();
             let mut first_path: libc::c_int = -1;
+            
+            let mut payload = query.payload;
+            if xor_key != 0 {
+                for b in &mut payload {
+                    *b ^= xor_key;
+                }
+            }
+
             let ret = unsafe {
                 picoquic_incoming_packet_ex(
                     quic,
-                    query.payload.as_ptr() as *mut u8,
-                    query.payload.len(),
+                    payload.as_ptr() as *mut u8,
+                    payload.len(),
                     &mut peer_storage as *mut _ as *mut libc::sockaddr,
                     &mut local_storage as *mut _ as *mut libc::sockaddr,
                     0,
@@ -92,7 +100,7 @@ fn decode_slot(
             }
             if first_cnx.is_null() {
                 if let Some(payload) =
-                    unsafe { take_stateless_packet_for_cid(quic, &query.payload) }
+                    unsafe { take_stateless_packet_for_cid(quic, &payload) }
                 {
                     if !payload.is_empty() {
                         return Ok(DecodeSlotOutcome::Slot(Slot {
