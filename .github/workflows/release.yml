@@ -180,7 +180,7 @@ jobs:
         run: |
           # Download and build OpenSSL for Android
           OPENSSL_VER=3.2.1
-          curl -O https://www.openssl.org/source/openssl-${OPENSSL_VER}.tar.gz
+          curl -L -O https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VER}/openssl-${OPENSSL_VER}.tar.gz
           tar xzf openssl-${OPENSSL_VER}.tar.gz
           cd openssl-${OPENSSL_VER}
           
@@ -211,8 +211,6 @@ jobs:
           export ANDROID_PLATFORM=24
           export OPENSSL_ROOT_DIR=${GITHUB_WORKSPACE}/openssl-android
           export OPENSSL_INCLUDE_DIR=${GITHUB_WORKSPACE}/openssl-android/include
-          export OPENSSL_CRYPTO_LIBRARY=${GITHUB_WORKSPACE}/openssl-android/lib/libcrypto.a
-          export OPENSSL_SSL_LIBRARY=${GITHUB_WORKSPACE}/openssl-android/lib/libssl.a
           bash scripts/build_picoquic.sh
           echo "PICOQUIC_DIR=${GITHUB_WORKSPACE}/slipstream-rust/vendor/picoquic" >> $GITHUB_ENV
           echo "PICOQUIC_BUILD_DIR=${GITHUB_WORKSPACE}/slipstream-rust/.picoquic-build" >> $GITHUB_ENV
@@ -430,7 +428,7 @@ jobs:
           fi
 
       - name: Build slipstream binaries
-        if: (runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target)) && !contains(matrix.target, 'android') && runner.os != 'Windows'
+        if: (runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target)) && !contains(matrix.target, 'android')
         working-directory: slipstream-rust
         shell: bash
         env:
@@ -461,7 +459,12 @@ jobs:
             export CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-L/usr/local/opt/openssl@3/lib -C link-arg=-arch -C link-arg=x86_64"
           fi
 
-          cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server
+          # Use vendored OpenSSL for Windows; Linux alternate arches use Docker
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server --features openssl-vendored
+          else
+            cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server
+          fi
 
       - name: Build slipstream binaries (Windows)
         if: runner.os == 'Windows'
@@ -471,6 +474,7 @@ jobs:
           PICOQUIC_FETCH_PTLS: ON
           PICOQUIC_AUTO_BUILD: 1
         run: |
+          # Using PowerShell to avoid Git bash link.exe conflict
           cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server --features openssl-vendored
 
       - name: Build slipstream binaries (Android)
@@ -484,6 +488,9 @@ jobs:
           export AR="${NDK_TOOLCHAIN}/llvm-ar"
           export RANLIB="${NDK_TOOLCHAIN}/llvm-ranlib"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${CC}"
+          
+          # Point to our custom OpenSSL build for the sys crate if needed, though vendored might handle it.
+          # For safety, we use vendored which builds its own, but picoquic used the one we built above.
           
           # Use openssl-vendored to build OpenSSL from source for Android
           cargo build --release --target ${{ matrix.target }} -p slipstream-client -p slipstream-server --features openssl-vendored
