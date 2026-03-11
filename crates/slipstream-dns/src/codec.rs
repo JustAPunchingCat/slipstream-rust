@@ -141,7 +141,7 @@ pub fn encode_query(params: &QueryParams<'_>) -> Result<Vec<u8>, DnsError> {
     Ok(out)
 }
 
-pub fn encode_response(params: &ResponseParams<'_>) -> Result<Vec<u8>, DnsError> {
+pub fn encode_response(params: &ResponseParams<'_>, xor_key: u8) -> Result<Vec<u8>, DnsError> {
     let payload_len = params.payload.map(|payload| payload.len()).unwrap_or(0);
 
     let mut rcode = params.rcode.unwrap_or(if payload_len > 0 {
@@ -195,7 +195,11 @@ pub fn encode_response(params: &ResponseParams<'_>) -> Result<Vec<u8>, DnsError>
             while remaining > 0 {
                 let chunk_len = remaining.min(255);
                 out.push(chunk_len as u8);
+                let start_idx = out.len();
                 out.extend_from_slice(&payload[cursor..cursor + chunk_len]);
+                if xor_key != 0 {
+                    for b in &mut out[start_idx..] { *b ^= xor_key; }
+                }
                 cursor += chunk_len;
                 remaining -= chunk_len;
             }
@@ -207,7 +211,7 @@ pub fn encode_response(params: &ResponseParams<'_>) -> Result<Vec<u8>, DnsError>
     Ok(out)
 }
 
-pub fn decode_response(packet: &[u8]) -> Option<Vec<u8>> {
+pub fn decode_response(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
     let header = parse_header(packet)?;
     if !header.is_response {
         return None;
@@ -266,6 +270,9 @@ pub fn decode_response(packet: &[u8]) -> Option<Vec<u8>> {
     }
     if out.is_empty() {
         return None;
+    }
+    if xor_key != 0 {
+        for b in &mut out { *b ^= xor_key; }
     }
     Some(out)
 }

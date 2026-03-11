@@ -69,20 +69,16 @@ fn decode_slot(
 ) -> Result<DecodeSlotOutcome, ServerError> {
     match decode_query_with_domains(packet, domains) {
         Ok(query) => {
-            let mut peer_storage = dummy_sockaddr_storage();
-            let mut local_storage = unsafe { std::ptr::read(local_addr_storage) };
-            let mut first_cnx: *mut picoquic_cnx_t = std::ptr::null_mut();
-            let mut first_path: libc::c_int = -1;
+            let mut try_process = |mut payload: Vec<u8>,
+                                   is_xor_mode: bool|
+             -> Option<(Slot, *mut picoquic_cnx_t, libc::c_int)> {
+                let mut peer_storage = dummy_sockaddr_storage();
+                let mut local_storage = unsafe { std::ptr::read(local_addr_storage) };
+                let mut first_cnx: *mut picoquic_cnx_t = std::ptr::null_mut();
+                let mut first_path: libc::c_int = -1;
 
-            let mut payload = query.payload;
-            if xor_key != 0 {
-                for b in &mut payload {
-                    *b ^= xor_key;
-                }
-            }
-
-            let ret = unsafe {
-                picoquic_incoming_packet_ex(
+                let ret = unsafe {
+                    picoquic_incoming_packet_ex(
                     quic,
                     payload.as_ptr() as *mut u8,
                     payload.len(),
@@ -94,42 +90,80 @@ fn decode_slot(
                     &mut first_path,
                     current_time,
                 )
-            };
-            if ret < 0 {
-                return Err(ServerError::new("Failed to process QUIC packet"));
-            }
-            if first_cnx.is_null() {
-                if let Some(payload) = unsafe { take_stateless_packet_for_cid(quic, &payload) } {
-                    if !payload.is_empty() {
-                        return Ok(DecodeSlotOutcome::Slot(Slot {
+                };
+                if ret < 0 {
+                    return None;
+                }
+
+                if first_cnx.is_null() {
+                    if let Some(resp_payload) =
+                        unsafe { take_stateless_packet_for_cid(quic, &payload) }
+                    {
+                        if !resp_payload.is_empty() {
+                            return Some((
+                                Slot {
                             peer,
                             id: query.id,
                             rd: query.rd,
                             cd: query.cd,
-                            question: query.question,
+                            question: query.question.clone(),
                             rcode: None,
                             cnx: std::ptr::null_mut(),
                             path_id: -1,
-                            payload_override: Some(payload),
-                        }));
+                                    payload_override: Some(resp_payload),
+                                    xor_mode: is_xor_mode,
+                                },
+                                std::ptr::null_mut(),
+                                -1,
+                            ));
+                        }
                     }
+                    return None;
                 }
-                return Ok(DecodeSlotOutcome::DnsOnly);
-            }
-            unsafe {
-                slipstream_disable_ack_delay(first_cnx);
-            }
-            Ok(DecodeSlotOutcome::Slot(Slot {
+
+                Some((
+                    Slot {
                 peer,
                 id: query.id,
                 rd: query.rd,
                 cd: query.cd,
-                question: query.question,
+                        question: query.question.clone(),
                 rcode: None,
                 cnx: first_cnx,
                 path_id: first_path,
                 payload_override: None,
-            }))
+                        xor_mode: is_xor_mode,
+                    },
+                    first_cnx,
+                    first_path,
+                ))
+            };
+
+            // 1. Try with XOR (if enabled)
+            if xor_key != 0 {
+                let mut masked_payload = query.payload.clone();
+                for b in &mut masked_payload {
+                    *b ^= xor_key;
+                }
+                if let Some((slot, cnx, _)) = try_process(masked_payload, true) {
+                    if !cnx.is_null() {
+                        unsafe { slipstream_disable_ack_delay(cnx) };
+                    }
+                    return Ok(DecodeSlotOutcome::Slot(slot));
+                }
+            }
+
+            // 2. Try plain (fallback)
+            // If xor_key was 0, this is the only attempt.
+            // If xor_key != 0 but failed, we try this to support legacy clients.
+            if let Some((slot, cnx, _)) = try_process(query.payload, false) {
+                if !cnx.is_null() {
+                    unsafe { slipstream_disable_ack_delay(cnx) };
+                }
+                return Ok(DecodeSlotOutcome::Slot(slot));
+            }
+
+            Ok(DecodeSlotOutcome::DnsOnly)
         }
         Err(DecodeQueryError::Drop) => Ok(DecodeSlotOutcome::Drop),
         Err(DecodeQueryError::Reply {
@@ -153,6 +187,7 @@ fn decode_slot(
                 cnx: std::ptr::null_mut(),
                 path_id: -1,
                 payload_override: None,
+                xor_mode: false,
             }))
         }
     }

@@ -143,6 +143,7 @@ pub(crate) struct Slot {
     pub(crate) cnx: *mut picoquic_cnx_t,
     pub(crate) path_id: libc::c_int,
     pub(crate) payload_override: Option<Vec<u8>>,
+    pub(crate) xor_mode: bool,
 }
 
 pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
@@ -458,14 +459,11 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 (None, slot.rcode)
             };
 
-            let key = get_obfuscation_key();
-            if key != 0 {
-                if let Some(p) = &mut payload {
-                    for b in p {
-                        *b ^= key;
-                    }
-                }
-            }
+            let xor_key = if slot.xor_mode {
+                get_obfuscation_key()
+            } else {
+                0
+            };
 
             let response = encode_response(&ResponseParams {
                 id: slot.id,
@@ -474,7 +472,7 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 question: &slot.question,
                 payload: payload.as_deref(),
                 rcode,
-            })
+            }, xor_key)
             .map_err(|err| ServerError::new(err.to_string()))?;
             let peer = if map_ipv4_peers {
                 normalize_dual_stack_addr(slot.peer)
