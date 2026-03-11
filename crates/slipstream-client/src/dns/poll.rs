@@ -91,8 +91,8 @@ pub(crate) async fn send_poll_queries(
         let randomized_domain = randomize_case(config.domain, poll_id);
         let key = get_obfuscation_key();
         if key != 0 {
-            for i in 0..send_length {
-                send_buf[i] ^= key;
+            for b in &mut send_buf[..send_length] {
+                *b ^= key;
             }
         }
         let qname = build_qname(&send_buf[..send_length], &randomized_domain)

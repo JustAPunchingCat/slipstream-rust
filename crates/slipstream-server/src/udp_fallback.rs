@@ -1,10 +1,6 @@
 use slipstream_ffi::picoquic::picoquic_quic_t;
-#[cfg(not(windows))]
-use slipstream_ffi::socket_addr_to_storage;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-#[cfg(not(windows))]
-use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -59,24 +55,5 @@ mod session;
 
 pub(crate) use decode::handle_packet;
 
-#[cfg(not(windows))]
-fn dummy_sockaddr_storage() -> slipstream_ffi::SockaddrStorage {
-    socket_addr_to_storage(SocketAddr::new(
-        IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
-        12345,
-    ))
-}
-
 #[cfg(test)]
 mod tests;
-
-#[cfg(windows)]
-fn dummy_sockaddr_storage() -> slipstream_ffi::SockaddrStorage {
-    use std::net::{Ipv6Addr, SocketAddrV6};
-    slipstream_ffi::socket_addr_to_storage(std::net::SocketAddr::V6(SocketAddrV6::new(
-        Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1),
-        12345,
-        0,
-        0,
-    )))
-}

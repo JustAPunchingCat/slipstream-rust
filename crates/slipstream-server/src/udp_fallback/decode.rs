@@ -1,4 +1,4 @@
-use super::{dummy_sockaddr_storage, FallbackManager, PacketContext};
+use super::{FallbackManager, PacketContext};
 use crate::server::{ServerError, Slot};
 use slipstream_core::cli::get_obfuscation_key;
 use slipstream_dns::{decode_query_with_domains, DecodeQueryError};
