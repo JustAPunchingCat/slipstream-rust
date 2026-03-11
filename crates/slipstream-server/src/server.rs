@@ -9,8 +9,8 @@ use slipstream_dns::{encode_response, Question, Rcode, ResponseParams};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_create, picoquic_current_time, picoquic_delete_cnx,
     picoquic_get_first_cnx, picoquic_get_next_cnx, picoquic_prepare_packet_ex, picoquic_quic_t,
-    slipstream_has_ready_stream, slipstream_is_flow_blocked, slipstream_server_cc_algorithm,
-    picoquic_set_default_multipath_option, PICOQUIC_MAX_PACKET_SIZE, PICOQUIC_PACKET_LOOP_RECV_MAX,
+    picoquic_set_default_multipath_option, slipstream_has_ready_stream, slipstream_is_flow_blocked,
+    slipstream_server_cc_algorithm, PICOQUIC_MAX_PACKET_SIZE, PICOQUIC_PACKET_LOOP_RECV_MAX,
 };
 use slipstream_ffi::{
     configure_quic_with_custom, socket_addr_to_storage, take_crypto_errors, QuicGuard,
@@ -467,14 +467,17 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 0
             };
 
-            let response = encode_response(&ResponseParams {
-                id: slot.id,
-                rd: slot.rd,
-                cd: slot.cd,
-                question: &slot.question,
-                payload: payload.as_deref(),
-                rcode,
-            }, xor_key)
+            let response = encode_response(
+                &ResponseParams {
+                    id: slot.id,
+                    rd: slot.rd,
+                    cd: slot.cd,
+                    question: &slot.question,
+                    payload: payload.as_deref(),
+                    rcode,
+                },
+                xor_key,
+            )
             .map_err(|err| ServerError::new(err.to_string()))?;
             let peer = if map_ipv4_peers {
                 normalize_dual_stack_addr(slot.peer)
