@@ -287,7 +287,7 @@ pub fn is_response(packet: &[u8]) -> bool {
     } else {
         return false;
     };
-    parse_header(&header_bytes)
+    parse_header(header_bytes)
         .map(|header| header.is_response)
         .unwrap_or(false)
 }
@@ -322,6 +322,6 @@ mod tests {
             payload: Some(&payload),
             rcode: None,
         };
-        assert!(encode_response(&params).is_err());
+        assert!(encode_response(&params, 0).is_err());
     }
 }

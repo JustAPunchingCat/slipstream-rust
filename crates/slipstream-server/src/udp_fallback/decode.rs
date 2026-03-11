@@ -150,7 +150,9 @@ fn decode_slot(
                 }
                 if let Some((slot, cnx, _)) = try_process(masked_payload, true) {
                     if !cnx.is_null() {
-                        unsafe { slipstream_disable_ack_delay(cnx) };
+                        unsafe {
+                            slipstream_disable_ack_delay(cnx);
+                        }
                     }
                     return Ok(DecodeSlotOutcome::Slot(slot));
                 }
@@ -161,7 +163,9 @@ fn decode_slot(
             // If xor_key != 0 but failed, we try this to support legacy clients.
             if let Some((slot, cnx, _)) = try_process(query.payload, false) {
                 if !cnx.is_null() {
-                    unsafe { slipstream_disable_ack_delay(cnx) };
+                    unsafe {
+                        slipstream_disable_ack_delay(cnx);
+                    }
                 }
                 return Ok(DecodeSlotOutcome::Slot(slot));
             }
