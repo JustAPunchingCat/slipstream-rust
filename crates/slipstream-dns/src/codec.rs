@@ -271,7 +271,11 @@ pub fn decode_response(packet: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn is_response(packet: &[u8]) -> bool {
-    let header_bytes = if let Some(bytes) = packet.get(..12) { bytes } else { return false; };
+    let header_bytes = if let Some(bytes) = packet.get(..12) {
+        bytes
+    } else {
+        return false;
+    };
     parse_header(&header_bytes)
         .map(|header| header.is_response)
         .unwrap_or(false)

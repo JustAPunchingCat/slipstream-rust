@@ -1,6 +1,6 @@
 use crate::error::ClientError;
-use slipstream_dns::decode_response;
 use slipstream_core::cli::get_obfuscation_key;
+use slipstream_dns::decode_response;
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_current_time, picoquic_incoming_packet_ex, picoquic_quic_t,
     PICOQUIC_PACKET_LOOP_RECV_MAX,

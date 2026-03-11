@@ -73,7 +73,7 @@ fn decode_slot(
             let mut local_storage = unsafe { std::ptr::read(local_addr_storage) };
             let mut first_cnx: *mut picoquic_cnx_t = std::ptr::null_mut();
             let mut first_path: libc::c_int = -1;
-            
+
             let mut payload = query.payload;
             if xor_key != 0 {
                 for b in &mut payload {
@@ -99,9 +99,7 @@ fn decode_slot(
                 return Err(ServerError::new("Failed to process QUIC packet"));
             }
             if first_cnx.is_null() {
-                if let Some(payload) =
-                    unsafe { take_stateless_packet_for_cid(quic, &payload) }
-                {
+                if let Some(payload) = unsafe { take_stateless_packet_for_cid(quic, &payload) } {
                     if !payload.is_empty() {
                         return Ok(DecodeSlotOutcome::Slot(Slot {
                             peer,

@@ -461,20 +461,20 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
             let key = get_obfuscation_key();
             if key != 0 {
                 if let Some(p) = &mut payload {
-                    for b in p { *b ^= key; }
+                    for b in p {
+                        *b ^= key;
+                    }
                 }
             }
 
-            let response = encode_response(
-                &ResponseParams {
-                    id: slot.id,
-                    rd: slot.rd,
-                    cd: slot.cd,
-                    question: &slot.question,
-                    payload: payload.as_deref(),
-                    rcode,
-                },
-            )
+            let response = encode_response(&ResponseParams {
+                id: slot.id,
+                rd: slot.rd,
+                cd: slot.cd,
+                question: &slot.question,
+                payload: payload.as_deref(),
+                rcode,
+            })
             .map_err(|err| ServerError::new(err.to_string()))?;
             let peer = if map_ipv4_peers {
                 normalize_dual_stack_addr(slot.peer)
