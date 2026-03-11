@@ -211,6 +211,16 @@ jobs:
           export ANDROID_PLATFORM=24
           export OPENSSL_ROOT_DIR=${GITHUB_WORKSPACE}/openssl-android
           export OPENSSL_INCLUDE_DIR=${GITHUB_WORKSPACE}/openssl-android/include
+          
+          # Explicitly find and export static library paths for CMake
+          if [ -f "${OPENSSL_ROOT_DIR}/lib/libcrypto.a" ]; then
+            export OPENSSL_CRYPTO_LIBRARY="${OPENSSL_ROOT_DIR}/lib/libcrypto.a"
+            export OPENSSL_SSL_LIBRARY="${OPENSSL_ROOT_DIR}/lib/libssl.a"
+          elif [ -f "${OPENSSL_ROOT_DIR}/lib64/libcrypto.a" ]; then
+            export OPENSSL_CRYPTO_LIBRARY="${OPENSSL_ROOT_DIR}/lib64/libcrypto.a"
+            export OPENSSL_SSL_LIBRARY="${OPENSSL_ROOT_DIR}/lib64/libssl.a"
+          fi
+
           bash scripts/build_picoquic.sh
           echo "PICOQUIC_DIR=${GITHUB_WORKSPACE}/slipstream-rust/vendor/picoquic" >> $GITHUB_ENV
           echo "PICOQUIC_BUILD_DIR=${GITHUB_WORKSPACE}/slipstream-rust/.picoquic-build" >> $GITHUB_ENV
@@ -427,22 +437,22 @@ jobs:
             sed -i 's/println!("cargo:rustc-link-lib=dylib=pthread");/if is_windows {\n        println!("cargo:rustc-link-lib=dylib=ws2_32");\n    } else {\n        println!("cargo:rustc-link-lib=dylib=pthread");\n    }/' "$BUILD_RS"
           fi
 
-      - name: Build slipstream binaries
-        if: (runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target)) && !contains(matrix.target, 'android')
+      - name: Build slipstream binaries (Unix)
+        if: (runner.os != 'Linux' || !contains('aarch64-unknown-linux-gnu,armv7-unknown-linux-gnueabihf,riscv64gc-unknown-linux-gnu,mips64-unknown-linux-gnuabi64,mips64el-unknown-linux-gnuabi64,mips-unknown-linux-gnu,mipsel-unknown-linux-gnu,aarch64-linux-android', matrix.target)) && !contains(matrix.target, 'android') && runner.os != 'Windows'
         working-directory: slipstream-rust
         shell: bash
         env:
           PICOQUIC_FETCH_PTLS: ON
           PICOQUIC_AUTO_BUILD: 1
         run: |
-          # macOS ARM64 native build
+          # Configure macOS ARM64 native build
           if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
             export OPENSSL_LIB_DIR=/opt/homebrew/opt/openssl@3/lib
             export OPENSSL_INCLUDE_DIR=/opt/homebrew/opt/openssl@3/include
             export CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-L/opt/homebrew/opt/openssl@3/lib"
           fi
 
-          # macOS Intel cross-compilation from ARM64 runner
+          # Configure macOS Intel cross-compilation from ARM64 runner
           if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
             export MACOSX_DEPLOYMENT_TARGET=10.12
             mkdir -p /tmp/cross-bin
