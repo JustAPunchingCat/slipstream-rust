@@ -467,7 +467,7 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 0
             };
 
-            let response = encode_response_with_key(
+            let response = match encode_response_with_key(
                 &ResponseParams {
                     id: slot.id,
                     rd: slot.rd,
@@ -477,8 +477,14 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                     rcode,
                 },
                 xor_key,
-            )
-            .map_err(|err| ServerError::new(err.to_string()))?;
+            ) {
+                Ok(response) => response,
+                Err(err) => {
+                    tracing::debug!("Failed to encode response for {}: {}", slot.peer, err);
+                    continue;
+                }
+            };
+
             let peer = if map_ipv4_peers {
                 normalize_dual_stack_addr(slot.peer)
             } else {

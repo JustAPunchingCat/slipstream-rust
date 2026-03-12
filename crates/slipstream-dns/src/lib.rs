@@ -17,7 +17,7 @@ pub use types::{
 };
 
 pub fn build_qname(payload: &[u8], domain: &str) -> Result<String, DnsError> {
-    let domain = domain.trim_end_matches('.');
+    let domain = domain.trim_matches('.');
     if domain.is_empty() {
         return Err(DnsError::new("domain must not be empty"));
     }
@@ -31,7 +31,7 @@ pub fn build_qname(payload: &[u8], domain: &str) -> Result<String, DnsError> {
 }
 
 pub fn max_payload_len_for_domain(domain: &str) -> Result<usize, DnsError> {
-    let domain = domain.trim_end_matches('.');
+    let domain = domain.trim_matches('.');
     if domain.is_empty() {
         return Err(DnsError::new("domain must not be empty"));
     }
