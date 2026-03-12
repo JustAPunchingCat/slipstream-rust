@@ -354,7 +354,7 @@ pub fn xor_qname_prefix(packet: &mut [u8], domain: &str, key: u8) {
         if len == 0 || cursor + 1 + len > prefix_end {
             break;
         }
-        
+
         // XOR the label content (skip length byte)
         for b in &mut packet[cursor + 1..cursor + 1 + len] {
             *b ^= key;

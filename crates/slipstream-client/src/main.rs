@@ -62,6 +62,10 @@ struct Args {
     mtu: u32,
     #[arg(long = "xor-key", default_value = "0", value_parser = parse_hex_u8)]
     xor_key: u8,
+    #[arg(long = "xor-label", default_value_t = false)]
+    xor_label: bool,
+    #[arg(long = "xor-data", default_value_t = false)]
+    xor_data: bool,
     #[arg(long = "debug-streams")]
     debug_streams: bool,
 }
@@ -71,11 +75,13 @@ fn main() {
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
 
-    set_config(args.mtu, args.xor_key);
+    set_config(args.mtu, args.xor_key, args.xor_label, args.xor_data);
     tracing::info!(
-        "Slipstream Client Config: MTU={} (0=Auto), XOR_KEY=0x{:02X}",
+        "Slipstream Client Config: MTU={} (0=Auto), XOR_KEY=0x{:02X}, LabelXOR={}, DataXOR={}",
         args.mtu,
-        args.xor_key
+        args.xor_key,
+        args.xor_label,
+        args.xor_data
     );
 
     let sip003_env = unwrap_or_exit(sip003::read_sip003_env(), "SIP003 env error", 2);

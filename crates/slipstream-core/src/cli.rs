@@ -10,6 +10,8 @@ static CONFIG: OnceLock<SlipstreamConfig> = OnceLock::new();
 struct SlipstreamConfig {
     mtu: u32,
     key: u8,
+    xor_label: bool,
+    xor_data: bool,
 }
 
 pub fn init_logging() {
@@ -38,8 +40,13 @@ pub fn exit_with_message(message: &str, code: i32) -> ! {
     std::process::exit(code);
 }
 
-pub fn set_config(mtu: u32, key: u8) {
-    let _ = CONFIG.set(SlipstreamConfig { mtu, key });
+pub fn set_config(mtu: u32, key: u8, xor_label: bool, xor_data: bool) {
+    let _ = CONFIG.set(SlipstreamConfig {
+        mtu,
+        key,
+        xor_label,
+        xor_data,
+    });
 }
 
 pub fn get_mtu() -> u32 {
@@ -51,6 +58,14 @@ pub fn get_obfuscation_key() -> u8 {
         .get()
         .map(|c| c.key)
         .unwrap_or(DEFAULT_OBFUSCATION_KEY)
+}
+
+pub fn get_xor_label() -> bool {
+    CONFIG.get().map(|c| c.xor_label).unwrap_or(false)
+}
+
+pub fn get_xor_data() -> bool {
+    CONFIG.get().map(|c| c.xor_data).unwrap_or(false)
 }
 
 pub fn parse_hex_u8(input: &str) -> Result<u8, String> {

@@ -1,6 +1,6 @@
 use super::{FallbackManager, PacketContext};
 use crate::server::{ServerError, Slot};
-use slipstream_core::cli::get_obfuscation_key;
+use slipstream_core::cli::{get_obfuscation_key, get_xor_data, get_xor_label};
 use slipstream_dns::{decode_query_with_domains, xor_qname_prefix, DecodeQueryError};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_incoming_packet_ex, picoquic_quic_t, slipstream_disable_ack_delay,
@@ -75,12 +75,19 @@ fn decode_slot(
     let mut attempt_packet = packet.to_vec();
     let result = decode_query_with_domains(&attempt_packet, domains);
 
-    let final_result = if result.is_err() && xor_key != 0 {
+    let final_result = if result.is_err() && xor_key != 0 && get_xor_label() {
         // Try unmasking wire labels for each configured domain until one works
         for domain in domains {
             xor_qname_prefix(&mut attempt_packet, domain, xor_key);
             if let Ok(res) = decode_query_with_domains(&attempt_packet, domains) {
-                return Ok(process_query(res, peer, xor_key, quic, current_time, local_addr_storage));
+                return Ok(process_query(
+                    res,
+                    peer,
+                    xor_key,
+                    quic,
+                    current_time,
+                    local_addr_storage,
+                ));
             }
             // Revert XOR for next attempt
             xor_qname_prefix(&mut attempt_packet, domain, xor_key);
@@ -91,9 +98,14 @@ fn decode_slot(
     };
 
     match final_result {
-        Ok(query) => {
-            Ok(process_query(query, peer, xor_key, quic, current_time, local_addr_storage))
-        }
+        Ok(query) => Ok(process_query(
+            query,
+            peer,
+            xor_key,
+            quic,
+            current_time,
+            local_addr_storage,
+        )),
         Err(DecodeQueryError::Drop) => Ok(DecodeSlotOutcome::Drop),
         Err(DecodeQueryError::Reply {
             id,
@@ -157,9 +169,7 @@ fn process_query(
         }
 
         if first_cnx.is_null() {
-            if let Some(resp_payload) =
-                unsafe { take_stateless_packet_for_cid(quic, &payload) }
-            {
+            if let Some(resp_payload) = unsafe { take_stateless_packet_for_cid(quic, &payload) } {
                 if !resp_payload.is_empty() {
                     return Some((
                         Slot {
@@ -201,7 +211,7 @@ fn process_query(
     };
 
     // 1. Try with XOR (if enabled)
-    if xor_key != 0 {
+    if xor_key != 0 && get_xor_data() {
         let mut masked_payload = query.payload.clone();
         for b in &mut masked_payload {
             *b ^= xor_key;

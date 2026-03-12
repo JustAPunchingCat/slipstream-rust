@@ -19,7 +19,7 @@ use crate::streams::{
     ClientState, Command,
 };
 use slipstream_core::{
-    cli::{get_mtu, get_obfuscation_key},
+    cli::{get_mtu, get_obfuscation_key, get_xor_data, get_xor_label},
     net::is_transient_udp_error,
     normalize_dual_stack_addr,
 };
@@ -344,7 +344,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                                 local_addr_storage: &local_addr_storage,
                                 resolvers: &mut resolvers,
                             };
-                            handle_dns_response(&recv_buf[..size], peer, &mut response_ctx)?;
+                            handle_dns_response(&recv_buf[..size], config.domain, peer, &mut response_ctx)?;
 
                             // We must process multiple packets if available, but we need to be careful
                             // not to block if the socket is empty.
@@ -354,7 +354,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                             while packets_processed < packet_loop_recv_max {
                                 match udp.try_recv_from(&mut recv_buf) {
                                     Ok((size, peer)) => {
-                                        handle_dns_response(&recv_buf[..size], peer, &mut response_ctx)?;
+                                        handle_dns_response(&recv_buf[..size], config.domain, peer, &mut response_ctx)?;
                                     }
                                     Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
                                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -443,7 +443,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                 }
 
                 let key = get_obfuscation_key();
-                if key != 0 {
+                if key != 0 && get_xor_data() {
                     for i in 0..send_length {
                         send_buf[i] ^= key;
                     }
@@ -464,8 +464,10 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                 let mut packet =
                     encode_query(&params).map_err(|err| ClientError::new(err.to_string()))?;
 
-                // Apply wire-level XOR to labels to match scanner behavior
-                xor_qname_prefix(&mut packet, config.domain, key);
+                if key != 0 && get_xor_label() {
+                    // Apply wire-level XOR to labels to match scanner behavior
+                    xor_qname_prefix(&mut packet, config.domain, key);
+                }
 
                 let dest = sockaddr_storage_to_socket_addr(&addr_to)?;
                 let dest = normalize_dual_stack_addr(dest);

@@ -1,11 +1,11 @@
 use crate::config::{ensure_cert_key, load_or_create_reset_seed, ResetSeed};
 use crate::udp_fallback::{handle_packet, FallbackManager, PacketContext, MAX_UDP_PACKET_SIZE};
 use slipstream_core::{
-    cli::{get_mtu, get_obfuscation_key},
+    cli::{get_mtu, get_obfuscation_key, get_xor_data, get_xor_label},
     net::{bind_first_resolved, bind_udp_socket_addr, is_transient_udp_error},
     normalize_dual_stack_addr, resolve_host_port, HostPort,
 };
-use slipstream_dns::{encode_response_with_key, Question, Rcode, ResponseParams};
+use slipstream_dns::{encode_response_with_key, xor_qname_prefix, Question, Rcode, ResponseParams};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_create, picoquic_current_time, picoquic_delete_cnx,
     picoquic_get_first_cnx, picoquic_get_next_cnx, picoquic_prepare_packet_ex, picoquic_quic_t,
@@ -461,13 +461,13 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 (None, slot.rcode)
             };
 
-            let xor_key = if slot.xor_mode {
+            let xor_key = if slot.xor_mode && get_xor_data() {
                 get_obfuscation_key()
             } else {
                 0
             };
 
-            let response = match encode_response_with_key(
+            let mut response = match encode_response_with_key(
                 &ResponseParams {
                     id: slot.id,
                     rd: slot.rd,
@@ -484,6 +484,18 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                     continue;
                 }
             };
+
+            // CRITICAL: We must XOR the response QNAME labels too.
+            // Otherwise, the server sends the domain in cleartext (e.g. "sU.MoN1.iR")
+            // which DPI will detect and block, even if the request was obfuscated.
+            if slot.xor_mode && get_xor_label() {
+                // We use the first configured domain for obfuscation alignment.
+                // In a multi-domain setup, this ideally should match the specific domain used
+                // by the client, but for now we assume the primary domain or that they share length properties.
+                if let Some(domain) = domains.first() {
+                    xor_qname_prefix(&mut response, domain, get_obfuscation_key());
+                }
+            }
 
             let peer = if map_ipv4_peers {
                 normalize_dual_stack_addr(slot.peer)
