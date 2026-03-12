@@ -23,7 +23,7 @@ use slipstream_core::{
     net::is_transient_udp_error,
     normalize_dual_stack_addr,
 };
-use slipstream_dns::{build_qname, encode_query, QueryParams, CLASS_IN, RR_TXT};
+use slipstream_dns::{build_qname, encode_query, xor_qname_prefix, QueryParams, CLASS_IN, RR_TXT};
 use slipstream_ffi::{
     configure_quic_with_custom,
     picoquic::{
@@ -461,8 +461,11 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                     is_query: true,
                 };
                 dns_id = dns_id.wrapping_add(1);
-                let packet =
+                let mut packet =
                     encode_query(&params).map_err(|err| ClientError::new(err.to_string()))?;
+
+                // Apply wire-level XOR to labels to match scanner behavior
+                xor_qname_prefix(&mut packet, config.domain, key);
 
                 let dest = sockaddr_storage_to_socket_addr(&addr_to)?;
                 let dest = normalize_dual_stack_addr(dest);

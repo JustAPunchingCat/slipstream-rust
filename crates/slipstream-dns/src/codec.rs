@@ -312,6 +312,54 @@ fn encode_opt_record(out: &mut Vec<u8>) -> Result<(), DnsError> {
     Ok(())
 }
 
+/// Applies XOR to the labels of the QNAME, excluding the domain suffix.
+/// Used to obfuscate the Base32 payload on the wire to match scanner behavior.
+pub fn xor_qname_prefix(packet: &mut [u8], domain: &str, key: u8) {
+    if key == 0 || packet.len() < 12 {
+        return;
+    }
+
+    // Find the end of the QNAME (the root null byte).
+    // Start scanning from offset 12 (header size).
+    let mut qname_end = 12;
+    loop {
+        if qname_end >= packet.len() {
+            return; // Malformed
+        }
+        let len = packet[qname_end] as usize;
+        if len == 0 {
+            break; // Found root
+        }
+        qname_end += 1 + len;
+    }
+
+    // Calculate the wire length of the domain suffix:
+    // A simple approximation `domain.len() + 2` works for "a.b" -> "1a1b0" (5 bytes) vs "a.b" (3 bytes).
+    let suffix_wire_len = domain.len() + 2;
+
+    // We want to stop XORing before the suffix (the real domain).
+    // qname_end is the index of the 0 byte.
+    let prefix_end = (qname_end + 1).saturating_sub(suffix_wire_len);
+
+    let mut cursor = 12;
+    while cursor < prefix_end {
+        // Safety check
+        if cursor >= packet.len() {
+            break;
+        }
+        let len = packet[cursor] as usize;
+        if len == 0 || cursor + 1 + len > prefix_end {
+            break;
+        }
+        
+        // XOR the label content (skip length byte)
+        for b in &mut packet[cursor + 1..cursor + 1 + len] {
+            *b ^= key;
+        }
+        cursor += 1 + len;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::encode_response_with_key;

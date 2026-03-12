@@ -1,7 +1,7 @@
 use crate::error::ClientError;
 use slipstream_core::cli::get_obfuscation_key;
 use slipstream_core::net::is_transient_udp_error;
-use slipstream_dns::{build_qname, encode_query, QueryParams, CLASS_IN, RR_TXT};
+use slipstream_dns::{build_qname, encode_query, xor_qname_prefix, QueryParams, CLASS_IN, RR_TXT};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_current_time, picoquic_prepare_packet_ex, slipstream_request_poll,
 };
@@ -108,7 +108,10 @@ pub(crate) async fn send_poll_queries(
             is_query: true,
         };
         *dns_id = dns_id.wrapping_add(1);
-        let packet = encode_query(&params).map_err(|err| ClientError::new(err.to_string()))?;
+        let mut packet = encode_query(&params).map_err(|err| ClientError::new(err.to_string()))?;
+
+        // Apply wire-level XOR to labels to match scanner behavior
+        xor_qname_prefix(&mut packet, config.domain, key);
 
         let dest = sockaddr_storage_to_socket_addr(&addr_to)?;
         let dest = normalize_dual_stack_addr(dest);
