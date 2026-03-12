@@ -344,7 +344,11 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                                 local_addr_storage: &local_addr_storage,
                                 resolvers: &mut resolvers,
                             };
-                            handle_dns_response(&recv_buf[..size], config.domain, peer, &mut response_ctx)?;
+                            if let Err(err) = handle_dns_response(&recv_buf[..size], config.domain, peer, &mut response_ctx) {
+                                // Do not crash on bad packets (decryption failures, garbage, etc.)
+                                // Just log and continue.
+                                debug!("Failed to process packet from {}: {}", peer, err);
+                            }
 
                             // We must process multiple packets if available, but we need to be careful
                             // not to block if the socket is empty.
@@ -354,7 +358,9 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                             while packets_processed < packet_loop_recv_max {
                                 match udp.try_recv_from(&mut recv_buf) {
                                     Ok((size, peer)) => {
-                                        handle_dns_response(&recv_buf[..size], config.domain, peer, &mut response_ctx)?;
+                                        if let Err(err) = handle_dns_response(&recv_buf[..size], config.domain, peer, &mut response_ctx) {
+                                            debug!("Failed to process batch packet from {}: {}", peer, err);
+                                        }
                                     }
                                     Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
                                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,

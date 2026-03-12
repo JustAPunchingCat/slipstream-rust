@@ -12,6 +12,7 @@ struct SlipstreamConfig {
     key: u8,
     xor_label: bool,
     xor_data: bool,
+    legacy_support: bool,
 }
 
 pub fn init_logging() {
@@ -40,12 +41,13 @@ pub fn exit_with_message(message: &str, code: i32) -> ! {
     std::process::exit(code);
 }
 
-pub fn set_config(mtu: u32, key: u8, xor_label: bool, xor_data: bool) {
+pub fn set_config(mtu: u32, key: u8, xor_label: bool, xor_data: bool, legacy_support: bool) {
     let _ = CONFIG.set(SlipstreamConfig {
         mtu,
         key,
         xor_label,
         xor_data,
+        legacy_support,
     });
 }
 
@@ -66,6 +68,10 @@ pub fn get_xor_label() -> bool {
 
 pub fn get_xor_data() -> bool {
     CONFIG.get().map(|c| c.xor_data).unwrap_or(false)
+}
+
+pub fn get_legacy_support() -> bool {
+    CONFIG.get().map(|c| c.legacy_support).unwrap_or(false)
 }
 
 pub fn parse_hex_u8(input: &str) -> Result<u8, String> {

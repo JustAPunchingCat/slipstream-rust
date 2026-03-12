@@ -53,6 +53,8 @@ struct Args {
     xor_label: bool,
     #[arg(long = "xor-data", default_value_t = false)]
     xor_data: bool,
+    #[arg(long = "legacy-support", default_value_t = false)]
+    legacy_support: bool,
     #[arg(long = "debug-streams")]
     debug_streams: bool,
     #[arg(long = "debug-commands")]
@@ -64,13 +66,20 @@ fn main() {
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
 
-    set_config(args.mtu, args.xor_key, args.xor_label, args.xor_data);
-    tracing::info!(
-        "Slipstream Server Config: MTU={} (0=Default/900), XOR_KEY=0x{:02X}, LabelXOR={}, DataXOR={}",
+    set_config(
         args.mtu,
         args.xor_key,
         args.xor_label,
-        args.xor_data
+        args.xor_data,
+        args.legacy_support,
+    );
+    tracing::info!(
+        "Slipstream Server Config: MTU={} (0=Default/900), XOR_KEY=0x{:02X}, LabelXOR={}, DataXOR={}, LegacySupport={}",
+        args.mtu,
+        args.xor_key,
+        args.xor_label,
+        args.xor_data,
+        args.legacy_support
     );
 
     let sip003_env = unwrap_or_exit(sip003::read_sip003_env(), "SIP003 env error", 2);

@@ -338,7 +338,7 @@ pub fn xor_qname_prefix(packet: &mut [u8], domain: &str, key: u8) {
 
     // Calculate the wire length of the domain suffix:
     // A simple approximation `domain.len() + 2` works for "a.b" -> "1a1b0" (5 bytes) vs "a.b" (3 bytes).
-    let suffix_wire_len = domain.trim_matches('.').len() + 2;
+    let suffix_wire_len = domain.trim_matches('.').len().saturating_add(2);
 
     // We want to stop XORing before the suffix (the real domain).
     // qname_end is the index of the 0 byte.

@@ -71,6 +71,7 @@ pub(crate) fn handle_dns_response(
                 current_time,
             )
         };
+        // If picoquic returns < 0, it means the packet was invalid or could not be decrypted.
         if ret < 0 {
             return Err(ClientError::new("Failed processing inbound QUIC packet"));
         }

@@ -1,7 +1,7 @@
 use crate::config::{ensure_cert_key, load_or_create_reset_seed, ResetSeed};
 use crate::udp_fallback::{handle_packet, FallbackManager, PacketContext, MAX_UDP_PACKET_SIZE};
 use slipstream_core::{
-    cli::{get_mtu, get_obfuscation_key, get_xor_data, get_xor_label},
+    cli::{get_mtu, get_obfuscation_key, get_xor_data},
     net::{bind_first_resolved, bind_udp_socket_addr, is_transient_udp_error},
     normalize_dual_stack_addr, resolve_host_port, HostPort,
 };
@@ -144,6 +144,7 @@ pub(crate) struct Slot {
     pub(crate) path_id: libc::c_int,
     pub(crate) payload_override: Option<Vec<u8>>,
     pub(crate) xor_mode: bool,
+    pub(crate) label_xor_mode: bool,
 }
 
 pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
@@ -488,7 +489,7 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
             // CRITICAL: We must XOR the response QNAME labels too.
             // Otherwise, the server sends the domain in cleartext (e.g. "sU.MoN1.iR")
             // which DPI will detect and block, even if the request was obfuscated.
-            if slot.xor_mode && get_xor_label() {
+            if slot.label_xor_mode {
                 // We use the first configured domain for obfuscation alignment.
                 // In a multi-domain setup, this ideally should match the specific domain used
                 // by the client, but for now we assume the primary domain or that they share length properties.
