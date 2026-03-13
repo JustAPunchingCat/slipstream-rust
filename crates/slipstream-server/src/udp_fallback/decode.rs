@@ -1,6 +1,6 @@
 use super::{FallbackManager, PacketContext};
 use crate::server::{ServerError, Slot};
-use slipstream_core::cli::{get_obfuscation_key, get_xor_data, get_xor_label};
+use slipstream_core::cli::{get_legacy_support, get_obfuscation_key, get_xor_data, get_xor_label};
 use slipstream_dns::{decode_query_with_domains, xor_qname_prefix, DecodeQueryError};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_incoming_packet_ex, picoquic_quic_t, slipstream_disable_ack_delay,
@@ -70,31 +70,45 @@ fn decode_slot(
     current_time: u64,
     local_addr_storage: &slipstream_ffi::SockaddrStorage,
 ) -> Result<DecodeSlotOutcome, ServerError> {
-    // Try to decode normally first.
-    // If that fails (and XOR is enabled), try unmasking the QNAME on the wire.
-    let mut attempt_packet = packet.to_vec();
-    let result = decode_query_with_domains(&attempt_packet, domains);
+    // Strict Mode Logic:
+    // If we are in XOR-Label mode, we MUST unmask first.
+    // If we are in Plain mode, we MUST decode directly.
+    // If legacy_support is ON, we try both.
 
-    let final_result = if result.is_err() && xor_key != 0 && get_xor_label() {
-        // Try unmasking wire labels for each configured domain until one works
+    let mut decoded_query: Option<slipstream_dns::DecodedQuery> = None;
+    let use_xor_label = xor_key != 0 && get_xor_label();
+    let mut label_was_xored = false;
+
+    // 1. Try XOR Label decoding if enabled
+    if use_xor_label {
+        let mut attempt_packet = packet.to_vec();
         for domain in domains {
             xor_qname_prefix(&mut attempt_packet, domain, xor_key);
             if let Ok(res) = decode_query_with_domains(&attempt_packet, domains) {
-                return Ok(process_query(
-                    res,
-                    peer,
-                    xor_key,
-                    quic,
-                    current_time,
-                    local_addr_storage,
-                ));
+                tracing::debug!("Successfully unmasked packet for domain: {}", domain);
+                decoded_query = Some(res);
+                label_was_xored = true;
+                break;
             }
-            // Revert XOR for next attempt
+            // Revert for next domain attempt
             xor_qname_prefix(&mut attempt_packet, domain, xor_key);
         }
-        result
+    }
+
+    // 2. Try Plain decoding if (Legacy is ON) OR (XOR Label is OFF) OR (XOR Label failed but we want to fallback)
+    // Actually, if XOR Label is required and failed, we might only want to fallback if legacy is on.
+    if decoded_query.is_none() && (!use_xor_label || get_legacy_support()) {
+        if let Ok(res) = decode_query_with_domains(packet, domains) {
+            decoded_query = Some(res);
+        }
+    }
+
+    let final_result = if let Some(q) = decoded_query {
+        Ok(q)
     } else {
-        result
+        // If we failed to decode, just return a generic error to trigger Drop/Fallback
+        // (decode_query_with_domains returns errors on failure)
+        decode_query_with_domains(packet, domains)
     };
 
     match final_result {
@@ -105,6 +119,7 @@ fn decode_slot(
             quic,
             current_time,
             local_addr_storage,
+            label_was_xored,
         )),
         Err(DecodeQueryError::Drop) => Ok(DecodeSlotOutcome::Drop),
         Err(DecodeQueryError::Reply {
@@ -129,6 +144,7 @@ fn decode_slot(
                 path_id: -1,
                 payload_override: None,
                 xor_mode: false,
+                label_xor_mode: false,
             }))
         }
     }
@@ -141,6 +157,7 @@ fn process_query(
     quic: *mut picoquic_quic_t,
     current_time: u64,
     local_addr_storage: &slipstream_ffi::SockaddrStorage,
+    label_was_xored: bool,
 ) -> DecodeSlotOutcome {
     let try_process = |payload: Vec<u8>,
                        is_xor_mode: bool|
@@ -183,6 +200,7 @@ fn process_query(
                             path_id: -1,
                             payload_override: Some(resp_payload),
                             xor_mode: is_xor_mode,
+                            label_xor_mode: label_was_xored,
                         },
                         std::ptr::null_mut(),
                         -1,
@@ -204,14 +222,18 @@ fn process_query(
                 path_id: first_path,
                 payload_override: None,
                 xor_mode: is_xor_mode,
+                label_xor_mode: label_was_xored,
             },
             first_cnx,
             first_path,
         ))
     };
 
-    // 1. Try with XOR (if enabled)
-    if xor_key != 0 && get_xor_data() {
+    // Process Payload
+    let use_xor_data = xor_key != 0 && get_xor_data();
+
+    // 1. Try with XOR Data if enabled
+    if use_xor_data {
         let mut masked_payload = query.payload.clone();
         for b in &mut masked_payload {
             *b ^= xor_key;
@@ -226,14 +248,17 @@ fn process_query(
         }
     }
 
-    // 2. Try plain (fallback)
-    if let Some((slot, cnx, _)) = try_process(query.payload, false) {
-        if !cnx.is_null() {
-            unsafe {
-                slipstream_disable_ack_delay(cnx);
+    // 2. Try plain (Fallback or Default)
+    // If we are strict XOR-Data mode, only try plain if legacy is supported.
+    if !use_xor_data || get_legacy_support() {
+        if let Some((slot, cnx, _)) = try_process(query.payload, false) {
+            if !cnx.is_null() {
+                unsafe {
+                    slipstream_disable_ack_delay(cnx);
+                }
             }
+            return DecodeSlotOutcome::Slot(slot);
         }
-        return DecodeSlotOutcome::Slot(slot);
     }
 
     DecodeSlotOutcome::DnsOnly
