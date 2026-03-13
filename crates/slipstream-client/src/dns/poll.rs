@@ -80,23 +80,33 @@ pub(crate) async fn send_poll_queries(
             break;
         }
 
+        let mut actual_len = send_length;
+        while actual_len > 0 && send_buf[actual_len - 1] == 0 {
+            actual_len -= 1;
+        }
+
         remaining_count -= 1;
         *local_addr_storage = addr_from;
         resolver.local_addr_storage = Some(unsafe { std::ptr::read(local_addr_storage) });
         resolver.debug.send_packets = resolver.debug.send_packets.saturating_add(1);
-        resolver.debug.send_bytes = resolver.debug.send_bytes.saturating_add(send_length as u64);
+        resolver.debug.send_bytes = resolver.debug.send_bytes.saturating_add(actual_len as u64);
         resolver.debug.polls_sent = resolver.debug.polls_sent.saturating_add(1);
 
         let poll_id = *dns_id;
         let randomized_domain = randomize_case(config.domain, poll_id);
         let key = get_obfs_key();
         if key != 0 && get_obfs_data() {
-            for b in &mut send_buf[..send_length] {
+            for b in &mut send_buf[..actual_len] {
                 *b = b.wrapping_add(key);
             }
         }
-        let qname = build_qname(&send_buf[..send_length], &randomized_domain)
-            .map_err(|err| ClientError::new(err.to_string()))?;
+        let qname = match build_qname(&send_buf[..actual_len], &randomized_domain) {
+            Ok(q) => q,
+            Err(e) => {
+                tracing::error!("Poll packet too large (len={}): {}", actual_len, e);
+                continue;
+            }
+        };
         let params = QueryParams {
             id: poll_id,
             qname: &qname,

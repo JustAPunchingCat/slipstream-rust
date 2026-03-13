@@ -9,7 +9,7 @@ use slipstream_dns::{encode_response_with_key, shift_qname_prefix, Question, Rco
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_create, picoquic_current_time, picoquic_delete_cnx,
     picoquic_get_first_cnx, picoquic_get_next_cnx, picoquic_prepare_packet_ex, picoquic_quic_t,
-    picoquic_set_default_multipath_option, slipstream_has_ready_stream, slipstream_is_flow_blocked,
+    picoquic_set_default_multipath_option, picoquic_disable_port_blocking, slipstream_has_ready_stream, slipstream_is_flow_blocked,
     slipstream_server_cc_algorithm, PICOQUIC_MAX_PACKET_SIZE, PICOQUIC_PACKET_LOOP_RECV_MAX,
 };
 use slipstream_ffi::{
@@ -251,6 +251,9 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
         configure_quic_with_custom(quic, slipstream_server_cc_algorithm, mtu);
         // Enable multipath to support clients connecting via multiple resolvers (paths)
         picoquic_set_default_multipath_option(quic, 1);
+        // Disable port blocking to allow unpadded handshake packets (since we
+        // stripped the padding to fit them inside the DNS QNAME limit).
+        picoquic_disable_port_blocking(quic, 1);
     }
 
     let udp = Arc::new(bind_udp_socket(&config.dns_listen_host, config.dns_listen_port).await?);
