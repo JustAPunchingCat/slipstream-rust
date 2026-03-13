@@ -47,12 +47,12 @@ struct Args {
     idle_timeout_seconds: u64,
     #[arg(long = "mtu", default_value_t = 0)]
     mtu: u32,
-    #[arg(long = "xor-key", default_value = "0", value_parser = parse_hex_u8)]
-    xor_key: u8,
-    #[arg(long = "xor-label", default_value_t = false)]
-    xor_label: bool,
-    #[arg(long = "xor-data", default_value_t = false)]
-    xor_data: bool,
+    #[arg(long = "obfs-key", default_value = "0", value_parser = parse_hex_u8)]
+    obfs_key: u8,
+    #[arg(long = "obfs-label", default_value_t = false)]
+    obfs_label: bool,
+    #[arg(long = "obfs-data", default_value_t = false)]
+    obfs_data: bool,
     #[arg(long = "legacy-support", default_value_t = false)]
     legacy_support: bool,
     #[arg(long = "debug-streams")]
@@ -68,17 +68,17 @@ fn main() {
 
     set_config(
         args.mtu,
-        args.xor_key,
-        args.xor_label,
-        args.xor_data,
+        args.obfs_key,
+        args.obfs_label,
+        args.obfs_data,
         args.legacy_support,
     );
     tracing::info!(
-        "Slipstream Server Config: MTU={} (0=Default/900), XOR_KEY=0x{:02X}, LabelXOR={}, DataXOR={}, LegacySupport={}",
+        "Slipstream Server Config: MTU={} (0=Default/900), OBFUSCATION_KEY=0x{:02X}, LabelObfs={}, DataObfs={}, LegacySupport={}",
         args.mtu,
-        args.xor_key,
-        args.xor_label,
-        args.xor_data,
+        args.obfs_key,
+        args.obfs_label,
+        args.obfs_data,
         args.legacy_support
     );
 

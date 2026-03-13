@@ -1,6 +1,6 @@
 use crate::error::ClientError;
 use slipstream_dns::decode_response_with_key;
-use slipstream_core::cli::{get_obfuscation_key, get_xor_data};
+use slipstream_core::cli::{get_obfs_data, get_obfs_key};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_current_time, picoquic_incoming_packet_ex, picoquic_quic_t,
     PICOQUIC_PACKET_LOOP_RECV_MAX,
@@ -27,9 +27,14 @@ pub(crate) fn handle_dns_response(
     let peer = normalize_dual_stack_addr(peer);
     let response_id = dns_response_id(buf);
 
-    let decode_key = if get_xor_data() { get_obfuscation_key() } else { 0 };
-
-    if let Some(payload) = decode_response_with_key(buf, decode_key) {
+    // Decode raw, then unshift
+    if let Some(mut payload) = decode_response_with_key(buf, 0) {
+        if get_obfs_data() {
+            let key = get_obfs_key();
+            for b in &mut payload {
+                *b = b.wrapping_sub(key);
+            }
+        }
         let resolver_index = ctx
             .resolvers
             .iter()

@@ -1,11 +1,11 @@
 use crate::config::{ensure_cert_key, load_or_create_reset_seed, ResetSeed};
 use crate::udp_fallback::{handle_packet, FallbackManager, PacketContext, MAX_UDP_PACKET_SIZE};
 use slipstream_core::{
-    cli::{get_mtu, get_obfuscation_key, get_xor_data},
+    cli::{get_mtu, get_obfs_data, get_obfs_key},
     net::{bind_first_resolved, bind_udp_socket_addr, is_transient_udp_error},
     normalize_dual_stack_addr, resolve_host_port, HostPort,
 };
-use slipstream_dns::{encode_response_with_key, xor_qname_prefix, Question, Rcode, ResponseParams};
+use slipstream_dns::{encode_response_with_key, shift_qname_prefix, Question, Rcode, ResponseParams};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_create, picoquic_current_time, picoquic_delete_cnx,
     picoquic_get_first_cnx, picoquic_get_next_cnx, picoquic_prepare_packet_ex, picoquic_quic_t,
@@ -143,8 +143,8 @@ pub(crate) struct Slot {
     pub(crate) cnx: *mut picoquic_cnx_t,
     pub(crate) path_id: libc::c_int,
     pub(crate) payload_override: Option<Vec<u8>>,
-    pub(crate) xor_mode: bool,
-    pub(crate) label_xor_mode: bool,
+    pub(crate) data_obfs_mode: bool,
+    pub(crate) label_obfs_mode: bool,
 }
 
 pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
@@ -462,8 +462,8 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 (None, slot.rcode)
             };
 
-            let xor_key = if slot.xor_mode && get_xor_data() {
-                get_obfuscation_key()
+            let obfs_key = if slot.data_obfs_mode && get_obfs_data() {
+                get_obfs_key()
             } else {
                 0
             };
@@ -477,7 +477,7 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                     payload: payload.as_deref(),
                     rcode,
                 },
-                xor_key,
+                obfs_key,
             ) {
                 Ok(response) => response,
                 Err(err) => {
@@ -486,15 +486,15 @@ pub async fn run_server(config: &ServerConfig) -> Result<i32, ServerError> {
                 }
             };
 
-            // CRITICAL: We must XOR the response QNAME labels too.
-            // Otherwise, the server sends the domain in cleartext (e.g. "sU.MoN1.iR")
-            // which DPI will detect and block, even if the request was obfuscated.
-            if slot.label_xor_mode {
+            // CRITICAL: We must obfuscate the response QNAME labels if the request was.
+            // Otherwise, the server sends the domain in cleartext (e.g. "sU.MoN1.iR"),
+            // which DPI will detect and block, breaking the symmetry of the connection.
+            if slot.label_obfs_mode {
                 // We use the first configured domain for obfuscation alignment.
                 // In a multi-domain setup, this ideally should match the specific domain used
                 // by the client, but for now we assume the primary domain or that they share length properties.
                 if let Some(domain) = domains.first() {
-                    xor_qname_prefix(&mut response, domain, get_obfuscation_key());
+                    shift_qname_prefix(&mut response, domain, get_obfs_key(), true);
                 }
             }
 

@@ -1,7 +1,7 @@
 use super::{FallbackManager, PacketContext};
 use crate::server::{ServerError, Slot};
-use slipstream_core::cli::{get_legacy_support, get_obfuscation_key, get_xor_data, get_xor_label};
-use slipstream_dns::{decode_query_with_domains, xor_qname_prefix, DecodeQueryError};
+use slipstream_core::cli::{get_legacy_support, get_obfs_data, get_obfs_key, get_obfs_label};
+use slipstream_dns::{decode_query_with_domains, shift_qname_prefix, DecodeQueryError};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_incoming_packet_ex, picoquic_quic_t, slipstream_disable_ack_delay,
 };
@@ -35,7 +35,7 @@ pub(crate) async fn handle_packet(
         packet,
         peer,
         context.domains,
-        get_obfuscation_key(),
+        get_obfs_key(),
         context.quic,
         context.current_time,
         context.local_addr_storage,
@@ -65,62 +65,95 @@ fn decode_slot(
     packet: &[u8],
     peer: SocketAddr,
     domains: &[&str],
-    xor_key: u8,
+    obfs_key: u8,
     quic: *mut picoquic_quic_t,
     current_time: u64,
     local_addr_storage: &slipstream_ffi::SockaddrStorage,
 ) -> Result<DecodeSlotOutcome, ServerError> {
-    // Strict Mode Logic:
-    // If we are in XOR-Label mode, we MUST unmask first.
-    // If we are in Plain mode, we MUST decode directly.
-    // If legacy_support is ON, we try both.
+    // Reliability Logic:
+    // We may have multiple candidates:
+    // 1. Obfuscated Label (if enabled)
+    // 2. Plain Label (if enabled or legacy support is active)
+    //
+    // To ensure reliability, we shouldn't just check if the label decodes to DNS;
+    // we must also check if the payload decrypts to a valid QUIC packet.
+    // We try the configured high-security mode first.
 
-    let mut decoded_query: Option<slipstream_dns::DecodedQuery> = None;
-    let use_xor_label = xor_key != 0 && get_xor_label();
-    let mut label_was_xored = false;
+    let use_obfs_label = obfs_key != 0 && get_obfs_label();
+    let try_legacy = !use_obfs_label || get_legacy_support();
 
-    // 1. Try XOR Label decoding if enabled
-    if use_xor_label {
+    let mut best_result = DecodeSlotOutcome::Drop;
+
+    // 1. Try Obfuscated Label decoding
+    if use_obfs_label {
         let mut attempt_packet = packet.to_vec();
         for domain in domains {
-            xor_qname_prefix(&mut attempt_packet, domain, xor_key);
+            shift_qname_prefix(&mut attempt_packet, domain, obfs_key, false); // unshift
             if let Ok(res) = decode_query_with_domains(&attempt_packet, domains) {
                 tracing::debug!("Successfully unmasked packet for domain: {}", domain);
-                decoded_query = Some(res);
-                label_was_xored = true;
+                let outcome = process_query(
+                    res,
+                    peer,
+                    obfs_key,
+                    quic,
+                    current_time,
+                    local_addr_storage,
+                    true, // label_was_obfs
+                );
+                if let DecodeSlotOutcome::Slot(_) = outcome {
+                    return Ok(outcome);
+                }
+                // If we found valid DNS but invalid QUIC, store as fallback
+                if let DecodeSlotOutcome::DnsOnly = outcome {
+                    best_result = DecodeSlotOutcome::DnsOnly;
+                }
                 break;
             }
             // Revert for next domain attempt
-            xor_qname_prefix(&mut attempt_packet, domain, xor_key);
+            shift_qname_prefix(&mut attempt_packet, domain, obfs_key, true); // reshift back
         }
     }
 
-    // 2. Try Plain decoding if (Legacy is ON) OR (XOR Label is OFF) OR (XOR Label failed but we want to fallback)
-    // Actually, if XOR Label is required and failed, we might only want to fallback if legacy is on.
-    if decoded_query.is_none() && (!use_xor_label || get_legacy_support()) {
+    // 2. Try Plain decoding
+    if try_legacy {
         if let Ok(res) = decode_query_with_domains(packet, domains) {
-            decoded_query = Some(res);
+            let outcome = process_query(
+                res,
+                peer,
+                obfs_key,
+                quic,
+                current_time,
+                local_addr_storage,
+                false, // label_was_obfs
+            );
+            if let DecodeSlotOutcome::Slot(_) = outcome {
+                return Ok(outcome);
+            }
+            // If plain decoding found DNS but not QUIC, it overrides previous DnsOnly
+            // because standard DNS is more likely than a collision on Obfs.
+            if let DecodeSlotOutcome::DnsOnly = outcome {
+                best_result = DecodeSlotOutcome::DnsOnly;
+            }
         }
     }
 
-    let final_result = if let Some(q) = decoded_query {
-        Ok(q)
-    } else {
-        // If we failed to decode, just return a generic error to trigger Drop/Fallback
-        // (decode_query_with_domains returns errors on failure)
-        decode_query_with_domains(packet, domains)
-    };
+    // 3. Fallback check: if we failed to find any valid Slot, but found DNS structure,
+    //    we might want to send a DNS error reply (e.g. for probing tools).
+    //    However, `process_query` usually handles successful DNS decode.
+    //    If we are here, it means we didn't return a Slot.
+    //    We need to check if `decode_query` failed entirely (Drop/Fallback) or
+    //    if it failed with a DNS error (Reply).
+    //    Since we called `decode_query_with_domains` inside the blocks, we need
+    //    to recover the error if `best_result` is not DnsOnly.
 
-    match final_result {
-        Ok(query) => Ok(process_query(
-            query,
-            peer,
-            xor_key,
-            quic,
-            current_time,
-            local_addr_storage,
-            label_was_xored,
-        )),
+    if let DecodeSlotOutcome::DnsOnly = best_result {
+        return Ok(DecodeSlotOutcome::DnsOnly);
+    }
+
+    // If we really found nothing, just try plain decode one last time to see if we should
+    // generate a formatted DNS error reply (like Refused or FormatError) instead of Drop.
+    match decode_query_with_domains(packet, domains) {
+        Ok(_) => Ok(DecodeSlotOutcome::DnsOnly), // Should have been caught above, but safe fallback
         Err(DecodeQueryError::Drop) => Ok(DecodeSlotOutcome::Drop),
         Err(DecodeQueryError::Reply {
             id,
@@ -130,7 +163,6 @@ fn decode_slot(
             rcode,
         }) => {
             let Some(question) = question else {
-                // Treat empty-question queries (QDCOUNT=0) as non-DNS for fallback.
                 return Ok(DecodeSlotOutcome::Drop);
             };
             Ok(DecodeSlotOutcome::Slot(Slot {
@@ -143,8 +175,8 @@ fn decode_slot(
                 cnx: std::ptr::null_mut(),
                 path_id: -1,
                 payload_override: None,
-                xor_mode: false,
-                label_xor_mode: false,
+                data_obfs_mode: false,
+                label_obfs_mode: false,
             }))
         }
     }
@@ -153,14 +185,14 @@ fn decode_slot(
 fn process_query(
     query: slipstream_dns::DecodedQuery,
     peer: SocketAddr,
-    xor_key: u8,
+    obfs_key: u8,
     quic: *mut picoquic_quic_t,
     current_time: u64,
     local_addr_storage: &slipstream_ffi::SockaddrStorage,
-    label_was_xored: bool,
+    label_was_obfs: bool,
 ) -> DecodeSlotOutcome {
     let try_process = |payload: Vec<u8>,
-                       is_xor_mode: bool|
+                       is_data_obfs_mode: bool|
      -> Option<(Slot, *mut picoquic_cnx_t, libc::c_int)> {
         let mut peer_storage = hash_peer_to_dummy_storage(peer);
         let mut local_storage = unsafe { std::ptr::read(local_addr_storage) };
@@ -199,8 +231,8 @@ fn process_query(
                             cnx: std::ptr::null_mut(),
                             path_id: -1,
                             payload_override: Some(resp_payload),
-                            xor_mode: is_xor_mode,
-                            label_xor_mode: label_was_xored,
+                            data_obfs_mode: is_data_obfs_mode,
+                            label_obfs_mode: label_was_obfs,
                         },
                         std::ptr::null_mut(),
                         -1,
@@ -221,8 +253,8 @@ fn process_query(
                 cnx: first_cnx,
                 path_id: first_path,
                 payload_override: None,
-                xor_mode: is_xor_mode,
-                label_xor_mode: label_was_xored,
+                data_obfs_mode: is_data_obfs_mode,
+                label_obfs_mode: label_was_obfs,
             },
             first_cnx,
             first_path,
@@ -230,13 +262,13 @@ fn process_query(
     };
 
     // Process Payload
-    let use_xor_data = xor_key != 0 && get_xor_data();
+    let use_data_obfs = obfs_key != 0 && get_obfs_data();
 
-    // 1. Try with XOR Data if enabled
-    if use_xor_data {
+    // 1. Try with Obfuscated Data if enabled
+    if use_data_obfs {
         let mut masked_payload = query.payload.clone();
         for b in &mut masked_payload {
-            *b ^= xor_key;
+            *b = b.wrapping_sub(obfs_key); // unshift data
         }
         if let Some((slot, cnx, _)) = try_process(masked_payload, true) {
             if !cnx.is_null() {
@@ -249,8 +281,8 @@ fn process_query(
     }
 
     // 2. Try plain (Fallback or Default)
-    // If we are strict XOR-Data mode, only try plain if legacy is supported.
-    if !use_xor_data || get_legacy_support() {
+    // If we are in strict Obfs-Data mode, only try plain if legacy is supported.
+    if !use_data_obfs || get_legacy_support() {
         if let Some((slot, cnx, _)) = try_process(query.payload, false) {
             if !cnx.is_null() {
                 unsafe {
