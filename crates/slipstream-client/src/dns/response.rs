@@ -1,6 +1,6 @@
 use crate::error::ClientError;
-use slipstream_core::cli::{get_obfuscation_key, get_xor_data, get_xor_label};
-use slipstream_dns::{decode_response_with_key, xor_qname_prefix};
+use slipstream_core::cli::{get_obfs_data, get_obfs_key, get_obfs_label};
+use slipstream_dns::{decode_response_with_key, shift_qname_prefix};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_current_time, picoquic_incoming_packet_ex, picoquic_quic_t,
     PICOQUIC_PACKET_LOOP_RECV_MAX,
@@ -26,24 +26,20 @@ pub(crate) fn handle_dns_response(
     ctx: &mut DnsResponseContext<'_>,
 ) -> Result<(), ClientError> {
     let peer = normalize_dual_stack_addr(peer);
-    let key = get_obfuscation_key();
+    let key = get_obfs_key();
 
-    // Try to unmask the wire-level XOR on the response packet
+    // Try to unmask the wire-level label obfuscation on the response packet
     let mut packet = buf.to_vec();
-    if key != 0 && get_xor_label() {
-        xor_qname_prefix(&mut packet, domain, key);
+    if key != 0 && get_obfs_label() {
+        shift_qname_prefix(&mut packet, domain, key, false);
     }
 
     let response_id = dns_response_id(&packet);
+    let decode_key = if get_obfs_data() { key } else { 0 };
 
-    let decode_key = if get_xor_data() { key } else { 0 };
-
-    // decode_response_with_key handles the inner Payload XOR
+    // decode_response_with_key handles the inner Payload shift
     if let Some(payload) = decode_response_with_key(&packet, decode_key) {
-        let resolver_index = ctx
-            .resolvers
-            .iter()
-            .position(|resolver| resolver.addr == peer);
+        let resolver_index = ctx.resolvers.iter().position(|resolver| resolver.addr == peer);
         let mut peer_storage = socket_addr_to_storage(peer);
         let mut local_storage = if let Some(index) = resolver_index {
             ctx.resolvers[index]

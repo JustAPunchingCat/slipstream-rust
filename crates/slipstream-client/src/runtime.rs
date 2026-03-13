@@ -19,11 +19,11 @@ use crate::streams::{
     ClientState, Command,
 };
 use slipstream_core::{
-    cli::{get_mtu, get_obfuscation_key, get_xor_data, get_xor_label},
+    cli::{get_mtu, get_obfs_data, get_obfs_key, get_obfs_label},
     net::is_transient_udp_error,
     normalize_dual_stack_addr,
 };
-use slipstream_dns::{build_qname, encode_query, xor_qname_prefix, QueryParams, CLASS_IN, RR_TXT};
+use slipstream_dns::{build_qname, encode_query, shift_qname_prefix, QueryParams, CLASS_IN, RR_TXT};
 use slipstream_ffi::{
     configure_quic_with_custom,
     picoquic::{
@@ -448,10 +448,10 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                     }
                 }
 
-                let key = get_obfuscation_key();
-                if key != 0 && get_xor_data() {
+                let key = get_obfs_key();
+                if key != 0 && get_obfs_data() {
                     for i in 0..send_length {
-                        send_buf[i] ^= key;
+                        send_buf[i] = send_buf[i].wrapping_add(key); // Shift Data
                     }
                 }
                 let qname = build_qname(&send_buf[..send_length], config.domain)
@@ -470,9 +470,9 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                 let mut packet =
                     encode_query(&params).map_err(|err| ClientError::new(err.to_string()))?;
 
-                if key != 0 && get_xor_label() {
-                    // Apply wire-level XOR to labels to match scanner behavior
-                    xor_qname_prefix(&mut packet, config.domain, key);
+                if key != 0 && get_obfs_label() {
+                    // Apply wire-level Shift (scramble) to labels
+                    shift_qname_prefix(&mut packet, config.domain, key, true);
                 }
 
                 let dest = sockaddr_storage_to_socket_addr(&addr_to)?;

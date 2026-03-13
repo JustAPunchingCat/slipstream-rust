@@ -147,7 +147,7 @@ pub fn encode_response(params: &ResponseParams<'_>) -> Result<Vec<u8>, DnsError>
 
 pub fn encode_response_with_key(
     params: &ResponseParams<'_>,
-    xor_key: u8,
+    obfs_key: u8,
 ) -> Result<Vec<u8>, DnsError> {
     let payload_len = params.payload.map(|payload| payload.len()).unwrap_or(0);
 
@@ -204,9 +204,9 @@ pub fn encode_response_with_key(
                 out.push(chunk_len as u8);
                 let start_idx = out.len();
                 out.extend_from_slice(&payload[cursor..cursor + chunk_len]);
-                if xor_key != 0 {
+                if obfs_key != 0 {
                     for b in &mut out[start_idx..] {
-                        *b ^= xor_key;
+                        *b = b.wrapping_add(obfs_key);
                     }
                 }
                 cursor += chunk_len;
@@ -224,7 +224,7 @@ pub fn decode_response(packet: &[u8]) -> Option<Vec<u8>> {
     decode_response_with_key(packet, 0)
 }
 
-pub fn decode_response_with_key(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
+pub fn decode_response_with_key(packet: &[u8], obfs_key: u8) -> Option<Vec<u8>> {
     let header = parse_header(packet)?;
     if !header.is_response {
         return None;
@@ -284,9 +284,9 @@ pub fn decode_response_with_key(packet: &[u8], xor_key: u8) -> Option<Vec<u8>> {
     if out.is_empty() {
         return None;
     }
-    if xor_key != 0 {
+    if obfs_key != 0 {
         for b in &mut out {
-            *b ^= xor_key;
+            *b = b.wrapping_sub(obfs_key);
         }
     }
     Some(out)
@@ -312,52 +312,55 @@ fn encode_opt_record(out: &mut Vec<u8>) -> Result<(), DnsError> {
     Ok(())
 }
 
-/// Applies XOR to the labels of the QNAME, excluding the domain suffix.
-/// Used to obfuscate the Base32 payload on the wire to match scanner behavior.
-pub fn xor_qname_prefix(packet: &mut [u8], domain: &str, key: u8) {
+/// Applies a Base32 alphabet shift to the labels of the QNAME.
+/// This keeps the label as valid alphanumeric text but scrambles it.
+/// forward=true adds the key (encrypt), forward=false subtracts it (decrypt).
+pub fn shift_qname_prefix(packet: &mut [u8], domain: &str, key: u8, forward: bool) {
     if key == 0 || packet.len() < 12 {
         return;
     }
+    let shift = (key % 32) as i8;
+    if shift == 0 {
+        return;
+    }
 
-    // Find the end of the QNAME (the root null byte).
-    // Start scanning from offset 12 (header size).
     let mut qname_end = 12;
     loop {
-        if qname_end >= packet.len() {
-            return; // Malformed
-        }
+        if qname_end >= packet.len() { return; }
         let len = packet[qname_end] as usize;
-        if len == 0 {
-            break; // Found root
-        }
-        if qname_end + 1 + len >= packet.len() {
-            return; // Malformed: label extends beyond packet
-        }
+        if len == 0 { break; }
+        if qname_end + 1 + len >= packet.len() { return; }
         qname_end += 1 + len;
     }
 
-    // Calculate the wire length of the domain suffix:
-    // A simple approximation `domain.len() + 2` works for "a.b" -> "1a1b0" (5 bytes) vs "a.b" (3 bytes).
     let suffix_wire_len = domain.trim_matches('.').len().saturating_add(2);
-
-    // We want to stop XORing before the suffix (the real domain).
-    // qname_end is the index of the 0 byte.
     let prefix_end = (qname_end + 1).saturating_sub(suffix_wire_len);
 
     let mut cursor = 12;
     while cursor < prefix_end {
-        // Safety check
-        if cursor >= packet.len() {
-            break;
-        }
+        if cursor >= packet.len() { break; }
         let len = packet[cursor] as usize;
-        if len == 0 || cursor + 1 + len > prefix_end {
-            break;
-        }
+        if len == 0 || cursor + 1 + len > prefix_end { break; }
 
-        // XOR the label content (skip length byte)
         for b in &mut packet[cursor + 1..cursor + 1 + len] {
-            *b ^= key;
+            let val = match *b {
+                b'A'..=b'Z' => *b - b'A',
+                b'a'..=b'z' => *b - b'a',
+                b'2'..=b'7' => *b - b'2' + 26,
+                _ => continue, // Skip non-base32 chars (e.g. hyphens if any)
+            };
+            
+            let new_val = if forward {
+                (val as i8 + shift).rem_euclid(32) as u8
+            } else {
+                (val as i8 - shift).rem_euclid(32) as u8
+            };
+
+            *b = if new_val < 26 {
+                b'a' + new_val // Use lowercase for uniformity
+            } else {
+                b'2' + (new_val - 26)
+            };
         }
         cursor += 1 + len;
     }

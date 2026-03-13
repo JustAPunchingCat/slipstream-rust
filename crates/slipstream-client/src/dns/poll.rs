@@ -1,7 +1,7 @@
 use crate::error::ClientError;
-use slipstream_core::cli::{get_obfuscation_key, get_xor_data, get_xor_label};
+use slipstream_core::cli::{get_obfs_data, get_obfs_key, get_obfs_label};
 use slipstream_core::net::is_transient_udp_error;
-use slipstream_dns::{build_qname, encode_query, xor_qname_prefix, QueryParams, CLASS_IN, RR_TXT};
+use slipstream_dns::{build_qname, encode_query, shift_qname_prefix, QueryParams, CLASS_IN, RR_TXT};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_current_time, picoquic_prepare_packet_ex, slipstream_request_poll,
 };
@@ -89,10 +89,10 @@ pub(crate) async fn send_poll_queries(
 
         let poll_id = *dns_id;
         let randomized_domain = randomize_case(config.domain, poll_id);
-        let key = get_obfuscation_key();
-        if key != 0 && get_xor_data() {
+        let key = get_obfs_key();
+        if key != 0 && get_obfs_data() {
             for b in &mut send_buf[..send_length] {
-                *b ^= key;
+                *b = b.wrapping_add(key);
             }
         }
         let qname = build_qname(&send_buf[..send_length], &randomized_domain)
@@ -110,9 +110,8 @@ pub(crate) async fn send_poll_queries(
         *dns_id = dns_id.wrapping_add(1);
         let mut packet = encode_query(&params).map_err(|err| ClientError::new(err.to_string()))?;
 
-        if key != 0 && get_xor_label() {
-            // Apply wire-level XOR to labels to match scanner behavior
-            xor_qname_prefix(&mut packet, config.domain, key);
+        if key != 0 && get_obfs_label() {
+            shift_qname_prefix(&mut packet, config.domain, key, true);
         }
 
         let dest = sockaddr_storage_to_socket_addr(&addr_to)?;

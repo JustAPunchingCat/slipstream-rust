@@ -10,8 +10,8 @@ static CONFIG: OnceLock<SlipstreamConfig> = OnceLock::new();
 struct SlipstreamConfig {
     mtu: u32,
     key: u8,
-    xor_label: bool,
-    xor_data: bool,
+    obfs_label: bool,
+    obfs_data: bool,
     legacy_support: bool,
 }
 
@@ -41,12 +41,12 @@ pub fn exit_with_message(message: &str, code: i32) -> ! {
     std::process::exit(code);
 }
 
-pub fn set_config(mtu: u32, key: u8, xor_label: bool, xor_data: bool, legacy_support: bool) {
+pub fn set_config(mtu: u32, key: u8, obfs_label: bool, obfs_data: bool, legacy_support: bool) {
     let _ = CONFIG.set(SlipstreamConfig {
         mtu,
         key,
-        xor_label,
-        xor_data,
+        obfs_label,
+        obfs_data,
         legacy_support,
     });
 }
@@ -55,19 +55,19 @@ pub fn get_mtu() -> u32 {
     CONFIG.get().map(|c| c.mtu).unwrap_or(DEFAULT_MTU)
 }
 
-pub fn get_obfuscation_key() -> u8 {
+pub fn get_obfs_key() -> u8 {
     CONFIG
         .get()
         .map(|c| c.key)
         .unwrap_or(DEFAULT_OBFUSCATION_KEY)
 }
 
-pub fn get_xor_label() -> bool {
-    CONFIG.get().map(|c| c.xor_label).unwrap_or(false)
+pub fn get_obfs_label() -> bool {
+    CONFIG.get().map(|c| c.obfs_label).unwrap_or(false)
 }
 
-pub fn get_xor_data() -> bool {
-    CONFIG.get().map(|c| c.xor_data).unwrap_or(false)
+pub fn get_obfs_data() -> bool {
+    CONFIG.get().map(|c| c.obfs_data).unwrap_or(false)
 }
 
 pub fn get_legacy_support() -> bool {
